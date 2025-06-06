@@ -1,16 +1,14 @@
 """
-Centralized configuration settings for the VAE pipeline.
+Optimized configuration settings for the VAE pipeline.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any
-from pathlib import Path
 
 @dataclass
 class PathConfig:
     """Path configuration settings."""
-    # Base directories
     DATA_DIR: str = 'data'
     OUTPUT_DIR: str = 'output'
     
@@ -40,109 +38,76 @@ class PathConfig:
     
     def create_directories(self) -> None:
         """Create all necessary directories."""
-        directories = [
-            self.DATA_DIR, self.OUTPUT_DIR, self.MODELS_DIR,
-            self.VISUALIZATIONS_DIR, self.SAMPLES_DIR, self.TESTS_DIR
-        ]
-        for directory in directories:
+        for directory in [self.DATA_DIR, self.OUTPUT_DIR, self.MODELS_DIR, 
+                         self.VISUALIZATIONS_DIR, self.SAMPLES_DIR, self.TESTS_DIR]:
             os.makedirs(directory, exist_ok=True)
 
 @dataclass
 class ModelConfig:
-    """Model architecture configuration."""
+    """Model architecture and training configuration."""
+    # Architecture
     HIDDEN_DIM: int = 16
     LATENT_DIM: int = 2
+    
+    # Training
     BATCH_SIZE: int = 128
     LEARNING_RATE: float = 1e-3
-    NUM_EPOCHS: int = 100
+    NUM_EPOCHS: int = 50
 
-@dataclass
+@dataclass  
 class TrainingConfig:
     """Training configuration."""
-    BETA_VALUES: List[float] = None
-    ANNEALING_STRATEGIES: List[str] = None
-    SAMPLE_SIZES: List[int] = None
+    BETA_VALUES: List[float] = field(default_factory=lambda: [0.1, 0.5, 1.0])
+    ANNEALING_STRATEGIES: List[str] = field(default_factory=lambda: ['linear', 'exponential'])
+    SAMPLE_SIZES: List[int] = field(default_factory=lambda: [100, 400, 900])
     
-    # Early stopping parameters
+    # Early stopping
     EARLY_STOPPING: bool = True
     EARLY_STOPPING_PATIENCE: int = 10
     EARLY_STOPPING_MIN_DELTA: float = 0.001
     RESTORE_BEST_WEIGHTS: bool = True
     
-    # Model checkpoint parameters
+    # Checkpointing
     SAVE_BEST_ONLY: bool = True
     CHECKPOINT_MONITOR: str = 'val_loss'
     CHECKPOINT_MODE: str = 'min'
-    
-    def __post_init__(self):
-        if self.BETA_VALUES is None:
-            self.BETA_VALUES = [0.1, 0.5, 1.0, 3.0, 5.0]
-        
-        if self.ANNEALING_STRATEGIES is None:
-            self.ANNEALING_STRATEGIES = ['linear', 'exponential']
-        
-        if self.SAMPLE_SIZES is None:
-            self.SAMPLE_SIZES = [100, 400, 900, 1225]
 
 @dataclass
 class DataConfig:
     """Data configuration."""
-    CATEGORICAL_COLS: List[str] = None
-    NUMERICAL_COLS: List[str] = None
+    CATEGORICAL_COLS: List[str] = field(default_factory=lambda: [
+        'code_country', 'T1_climate_day_period', 'T1_climate_dazzled', 
+        'T1_climate_fog', 'T1_climate_precipitation', 'NumberOfLanesInPrincipalRoad'
+    ])
     
-    def __post_init__(self):
-        if self.CATEGORICAL_COLS is None:
-            self.CATEGORICAL_COLS = [
-                'code_country', 
-                'T1_climate_day_period', 
-                'T1_climate_dazzled', 
-                'T1_climate_fog', 
-                'T1_climate_precipitation',
-                'NumberOfLanesInPrincipalRoad'
-            ]
-        
-        if self.NUMERICAL_COLS is None:
-            self.NUMERICAL_COLS = [
-                'FrontCurvature', 
-                'T1_ego_speed', 
-                'T1_climate_outside_temperature', 
-                'T1_V1 (CIPV)_pos_x', 
-                'T1_V1 (CIPV)_pos_y', 
-                'T1_V1 (CIPV)_absolute_velocity_x', 
-                'T1_V1 (CIPV)_absolute_acceleration_x', 
-                'T2_V1 (CIPV)_absolute_velocity_x'
-            ]
+    NUMERICAL_COLS: List[str] = field(default_factory=lambda: [
+        'FrontCurvature', 'T1_ego_speed', 'T1_climate_outside_temperature', 
+        'T1_V1 (CIPV)_pos_x', 'T1_V1 (CIPV)_pos_y', 'T1_V1 (CIPV)_absolute_velocity_x', 
+        'T1_V1 (CIPV)_absolute_acceleration_x', 'T2_V1 (CIPV)_absolute_velocity_x'
+    ])
 
 @dataclass
 class SamplingConfig:
     """Sampling configuration."""
-    DEFAULT_METHODS: List[str] = None
+    DEFAULT_METHODS: List[str] = field(default_factory=lambda: ['equiprobable', 'cluster_based'])
     
-    # Representative sampling parameters
+    # Core parameters
     INFO_WEIGHT: float = 1.0
     REDUNDANCY_WEIGHT: float = 1.0
     COVERAGE_RADIUS: float = 0.2
-    CANDIDATE_FRACTION: float = 1.0
     
-    # Cluster-based parameters
-    N_CLUSTERS_FACTOR: float = 0.1
-    MIN_CLUSTERS: int = 5
-    MAX_CLUSTERS: int = 500  # Increased from 50
+    # Clustering parameters
     CLUSTER_METHOD: str = 'kmeans'
-    WITHIN_CLUSTER_METHOD: str = 'centroid_distance'
     CLUSTER_SIZING_METHOD: str = 'adaptive'
+    MIN_CLUSTERS: int = 5
+    MAX_CLUSTERS: int = 500
     
     # Hybrid parameters
     CLUSTER_FRACTION: float = 0.7
     DISTANCE_FRACTION: float = 0.3
-    
-    def __post_init__(self):
-        if self.DEFAULT_METHODS is None:
-            self.DEFAULT_METHODS = ['equiprobable', 'cluster_based']
 
-# Global configuration instance
 class Config:
-    """Main configuration class combining all sub-configurations."""
+    """Main configuration class."""
     
     def __init__(self):
         self.paths = PathConfig()
@@ -170,39 +135,13 @@ class Config:
             'info_weight': self.sampling.INFO_WEIGHT,
             'redundancy_weight': self.sampling.REDUNDANCY_WEIGHT,
             'coverage_radius': self.sampling.COVERAGE_RADIUS,
-            'candidate_fraction': self.sampling.CANDIDATE_FRACTION,
-            'n_clusters_factor': self.sampling.N_CLUSTERS_FACTOR,
+            'cluster_method': self.sampling.CLUSTER_METHOD,
+            'cluster_sizing_method': self.sampling.CLUSTER_SIZING_METHOD,
             'min_clusters': self.sampling.MIN_CLUSTERS,
             'max_clusters': self.sampling.MAX_CLUSTERS,
-            'cluster_method': self.sampling.CLUSTER_METHOD,
-            'within_cluster_method': self.sampling.WITHIN_CLUSTER_METHOD,
-            'cluster_sizing_method': self.sampling.CLUSTER_SIZING_METHOD,
             'cluster_fraction': self.sampling.CLUSTER_FRACTION,
             'distance_fraction': self.sampling.DISTANCE_FRACTION
         }
 
 # Global config instance
 config = Config()
-
-# Backward compatibility - expose commonly used paths and settings
-DATA_DIR = config.paths.DATA_DIR
-OUTPUT_DIR = config.paths.OUTPUT_DIR
-MODELS_DIR = config.paths.MODELS_DIR
-VISUALIZATIONS_DIR = config.paths.VISUALIZATIONS_DIR
-SAMPLES_DIR = config.paths.SAMPLES_DIR
-TESTS_DIR = config.paths.TESTS_DIR
-DATA_FILE = config.paths.DATA_FILE
-PREPROCESSED_FILE = config.paths.PREPROCESSED_FILE
-
-HIDDEN_DIM = config.model.HIDDEN_DIM
-LATENT_DIM = config.model.LATENT_DIM
-BATCH_SIZE = config.model.BATCH_SIZE
-LEARNING_RATE = config.model.LEARNING_RATE
-NUM_EPOCHS = config.model.NUM_EPOCHS
-
-BETA_VALUES = config.training.BETA_VALUES
-ANNEALING_STRATEGIES = config.training.ANNEALING_STRATEGIES
-SAMPLE_SIZES = config.training.SAMPLE_SIZES
-
-CATEGORICAL_COLS = config.data.CATEGORICAL_COLS
-NUMERICAL_COLS = config.data.NUMERICAL_COLS

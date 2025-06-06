@@ -1,2 +1,2 @@
 ,Best_Overall,Highest_Power,Best_Effect_Detection,Most_Consistent,Best_P_Values
-0,cluster_based,cluster_based,sliced_wasserstein,cluster_based,cluster_based
+0,equiprobable,equiprobable,equiprobable,equiprobable,equiprobable

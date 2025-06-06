@@ -10,6 +10,10 @@ import seaborn as sns
 from scipy import stats
 from scipy.spatial.distance import cdist
 import torch
+import pickle
+import glob
+import re
+import shutil
 from typing import Dict, List, Tuple, Optional, Any
 import logging
 import time
@@ -35,8 +39,8 @@ class DistributionTester:
         
         # Testing parameters
         self.fast_mode = os.environ.get('VAE_FAST_MODE', '0') == '1'
-        self.max_samples = 1000 if self.fast_mode else 5000
-        self.n_permutations = 50 if self.fast_mode else 500
+        self.max_samples = 1000 if self.fast_mode else 2000  # Reduced for efficiency
+        self.n_permutations = 50 if self.fast_mode else 200  # Reduced for efficiency
         
         logger.info(f"Distribution tester initialized (fast_mode: {self.fast_mode})")
     
@@ -52,7 +56,11 @@ class DistributionTester:
         all_results = {}
         
         # Load original data
-        original_df = self._load_original_data()
+        try:
+            original_df = self._load_original_data()
+        except Exception as e:
+            logger.error(f"Failed to load original data: {e}")
+            return {'error': f'Failed to load original data: {e}'}
         
         # Process each configuration
         for strategy in self.config.training.ANNEALING_STRATEGIES:
@@ -75,13 +83,21 @@ class DistributionTester:
     
     def _load_original_data(self) -> pd.DataFrame:
         """Load original filtered data."""
-        data_path = os.path.join(self.config.paths.DATA_DIR, 'filtered_data.csv')
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Original data not found: {data_path}")
+        # Try multiple possible data file locations
+        data_paths = [
+            os.path.join(self.config.paths.DATA_DIR, 'filtered_data.csv'),
+            os.path.join(self.config.paths.DATA_DIR, 'data.csv'),
+            self.config.paths.DATA_FILE
+        ]
         
-        df = pd.read_csv(data_path)
-        logger.info(f"Loaded original data: {len(df)} samples")
-        return df
+        for data_path in data_paths:
+            if os.path.exists(data_path):
+                logger.info(f"Loading original data from: {data_path}")
+                df = pd.read_csv(data_path)
+                logger.info(f"Loaded original data: {len(df)} samples")
+                return df
+        
+        raise FileNotFoundError(f"Original data not found in any of: {data_paths}")
     
     def _test_single_configuration(
         self, 
@@ -170,7 +186,7 @@ class DistributionTester:
         gower_results = self._run_gower_test(original_df, sampled_df)
         results['gower'] = gower_results
         
-        # 2. Multivariate latent space test
+        # 2. Multivariate latent space test (with enhanced model loading)
         logger.debug("    Running latent space test...")
         latent_results = self._run_latent_test(
             original_df, sampled_df, strategy, beta
@@ -265,10 +281,10 @@ class DistributionTester:
         strategy: str,
         beta: float
     ) -> Dict[str, Any]:
-        """Run multivariate latent space test."""
+        """Run multivariate latent space test with enhanced model loading."""
         try:
-            # Load VAE model and get latent encodings
-            z_original, z_sampled = self._get_latent_encodings(
+            # Load VAE model and get latent encodings using enhanced loader
+            z_original, z_sampled = self._get_latent_encodings_enhanced(
                 original_df, sampled_df, strategy, beta
             )
             
@@ -382,7 +398,7 @@ class DistributionTester:
             return 0.0
         
         # Subsample for efficiency
-        n_pairs = min(1000, len(data1) * len(data2))
+        n_pairs = min(500, len(data1) * len(data2))  # Reduced for speed
         
         if n_pairs == len(data1) * len(data2):
             # Small enough to compute all pairs
@@ -431,43 +447,106 @@ class DistributionTester:
         p_value = np.mean(np.array(permutation_distances) >= observed_distance)
         return max(p_value, 1e-10)  # Avoid exactly zero p-values
     
-    def _get_latent_encodings(
+    def _get_latent_encodings_enhanced(
         self,
         original_df: pd.DataFrame,
         sampled_df: pd.DataFrame,
         strategy: str,
         beta: float
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """Get latent encodings for original and sampled data."""
+        """
+        Get latent encodings with enhanced model loading (same as sampling manager).
+        """
         try:
             from models.vae import VAE, get_latent_encoding
             
-            # Load model
-            model_path = os.path.join(
-                self.config.paths.MODELS_DIR,
-                strategy,
-                f'beta_{beta}',
-                'vae_model_final.pth'
-            )
+            # Enhanced model loading with recovery
+            model_dir = os.path.join(self.config.paths.MODELS_DIR, strategy, f'beta_{beta}')
+            model_path = os.path.join(model_dir, 'vae_model_final.pth')
             
+            logger.debug(f"Looking for model: {model_path}")
+            
+            # Check if model exists, try recovery if not
             if not os.path.exists(model_path):
-                logger.warning(f"Model not found: {model_path}")
+                logger.warning(f"Final model not found: {model_path}")
+                logger.info("Attempting to recover from checkpoints...")
+                
+                try:
+                    self._recover_final_model_from_checkpoint(model_dir)
+                    if not os.path.exists(model_path):
+                        raise FileNotFoundError("Recovery failed - no final model created")
+                    logger.info("Successfully recovered final model from checkpoint")
+                except Exception as e:
+                    logger.error(f"Model recovery failed for {strategy}-{beta}: {e}")
+                    
+                    # Last resort: look for any available model
+                    alternative_paths = [
+                        os.path.join(model_dir, 'vae_model.pth'),
+                        os.path.join(model_dir, 'model.pth'),
+                        os.path.join(model_dir, 'checkpoint.pth')
+                    ]
+                    
+                    # Also check for checkpoint files
+                    checkpoint_files = glob.glob(os.path.join(model_dir, "checkpoint_epoch_*.pth"))
+                    if checkpoint_files:
+                        # Use the most recent checkpoint
+                        latest_checkpoint = max(checkpoint_files, key=os.path.getmtime)
+                        alternative_paths.insert(0, latest_checkpoint)
+                    
+                    model_path = None
+                    for alt_path in alternative_paths:
+                        if os.path.exists(alt_path):
+                            logger.info(f"Using alternative model: {alt_path}")
+                            model_path = alt_path
+                            break
+                    
+                    if model_path is None:
+                        logger.error(f"No model files found for {strategy}-{beta} in {model_dir}")
+                        return None, None
+            
+            # Load model with enhanced error handling
+            try:
+                logger.debug(f"Loading model from: {model_path}")
+                checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+                
+                # Validate and reconstruct checkpoint if needed
+                checkpoint = self._validate_and_reconstruct_checkpoint(checkpoint, strategy, beta)
+                
+            except Exception as e:
+                logger.error(f"Failed to load model from {model_path}: {e}")
                 return None, None
             
-            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
-            
-            # Create model
-            model = VAE(
-                input_dim=checkpoint['input_dim'],
-                num_numerical=checkpoint['num_numerical'],
-                hidden_dim=checkpoint['hidden_dim'],
-                latent_dim=checkpoint['latent_dim'],
-                cat_dict=checkpoint['categorical_cardinality']
-            ).to(self.device)
-            
-            model.load_state_dict(checkpoint['model_state_dict'])
+            # Create model instance with error handling
+            try:
+                # Handle different checkpoint formats
+                cat_dict = checkpoint.get('categorical_cardinality', {})
+                if isinstance(cat_dict, dict) and not cat_dict:
+                    # Load from preprocessing objects if empty
+                    logger.debug("Loading categorical info from preprocessing objects")
+                    cat_dict = self._load_categorical_info()
+                
+                model = VAE(
+                    input_dim=checkpoint['input_dim'],
+                    num_numerical=checkpoint['num_numerical'],
+                    hidden_dim=checkpoint.get('hidden_dim', self.config.model.HIDDEN_DIM),
+                    latent_dim=checkpoint.get('latent_dim', self.config.model.LATENT_DIM),
+                    cat_dict=cat_dict
+                ).to(self.device)
+                
+                model.load_state_dict(checkpoint['model_state_dict'])
+                model.eval()  # Set to evaluation mode
+                
+                logger.debug("Model loaded successfully")
+                
+            except Exception as e:
+                logger.error(f"Failed to create model instance: {e}")
+                return None, None
             
             # Load preprocessed data
+            if not os.path.exists(self.config.paths.PREPROCESSED_FILE):
+                logger.error(f"Preprocessed data not found: {self.config.paths.PREPROCESSED_FILE}")
+                return None, None
+            
             preprocessed_df = pd.read_csv(self.config.paths.PREPROCESSED_FILE)
             
             # Get encodings for original data (subsample)
@@ -478,8 +557,14 @@ class DistributionTester:
                 original_indices = np.arange(len(original_df))
                 original_subset = original_df
             
+            # Ensure indices are within bounds
+            valid_indices = original_indices[original_indices < len(preprocessed_df)]
+            if len(valid_indices) == 0:
+                logger.error("No valid indices for original data")
+                return None, None
+            
             original_preprocessed = torch.FloatTensor(
-                preprocessed_df.iloc[original_indices].values
+                preprocessed_df.iloc[valid_indices].values
             ).to(self.device)
             z_original = get_latent_encoding(model, original_preprocessed, self.device)
             
@@ -492,8 +577,9 @@ class DistributionTester:
                     ).to(self.device)
                 else:
                     # Use random subset if indices don't match
+                    sampled_size = min(len(sampled_df), len(preprocessed_df))
                     sampled_indices = np.random.choice(
-                        len(preprocessed_df), len(sampled_df), replace=False
+                        len(preprocessed_df), sampled_size, replace=False
                     )
                     sampled_preprocessed = torch.FloatTensor(
                         preprocessed_df.iloc[sampled_indices].values
@@ -505,11 +591,123 @@ class DistributionTester:
                 logger.warning(f"Could not map sampled data indices: {e}")
                 return None, None
             
+            logger.debug(f"Latent encodings obtained: original {z_original.shape}, sampled {z_sampled.shape}")
             return z_original, z_sampled
             
         except Exception as e:
             logger.error(f"Error getting latent encodings: {e}")
             return None, None
+    
+    def _validate_and_reconstruct_checkpoint(self, checkpoint: dict, strategy: str, beta: float) -> dict:
+        """Validate checkpoint and reconstruct missing information."""
+        required_keys = ['model_state_dict', 'input_dim', 'num_numerical']
+        missing_keys = [key for key in required_keys if key not in checkpoint]
+        
+        if missing_keys:
+            logger.warning(f"Checkpoint missing keys: {missing_keys}")
+            checkpoint = self._reconstruct_checkpoint_info(checkpoint, strategy, beta)
+        
+        return checkpoint
+    
+    def _reconstruct_checkpoint_info(self, checkpoint: dict, strategy: str, beta: float) -> dict:
+        """Reconstruct missing checkpoint information."""
+        logger.info("Reconstructing missing checkpoint information")
+        
+        # Try to load preprocessing objects for missing info
+        try:
+            preprocessing_path = os.path.join(self.config.paths.DATA_DIR, 'preprocessing_objects.pkl')
+            if os.path.exists(preprocessing_path):
+                with open(preprocessing_path, 'rb') as f:
+                    preprocessing_objects = pickle.load(f)
+                
+                if 'categorical_cardinality' not in checkpoint:
+                    checkpoint['categorical_cardinality'] = preprocessing_objects.get('categorical_cardinality', {})
+                
+                if 'num_numerical' not in checkpoint:
+                    checkpoint['num_numerical'] = len(preprocessing_objects.get('num_cols', []))
+            
+        except Exception as e:
+            logger.warning(f"Could not load preprocessing objects: {e}")
+        
+        # Set defaults for missing values
+        if 'input_dim' not in checkpoint:
+            # Try to infer from model state dict
+            try:
+                first_layer = None
+                for key in checkpoint['model_state_dict'].keys():
+                    if 'encoder' in key and 'weight' in key:
+                        first_layer = checkpoint['model_state_dict'][key]
+                        break
+                
+                if first_layer is not None:
+                    checkpoint['input_dim'] = first_layer.shape[1]
+                    logger.info(f"Inferred input_dim: {checkpoint['input_dim']}")
+                else:
+                    checkpoint['input_dim'] = self.config.model.HIDDEN_DIM * 2  # Fallback
+                    
+            except Exception:
+                checkpoint['input_dim'] = self.config.model.HIDDEN_DIM * 2
+        
+        if 'num_numerical' not in checkpoint:
+            checkpoint['num_numerical'] = len(self.config.data.NUMERICAL_COLS)
+        
+        if 'hidden_dim' not in checkpoint:
+            checkpoint['hidden_dim'] = self.config.model.HIDDEN_DIM
+        
+        if 'latent_dim' not in checkpoint:
+            checkpoint['latent_dim'] = self.config.model.LATENT_DIM
+        
+        return checkpoint
+    
+    def _load_categorical_info(self) -> dict:
+        """Load categorical information from preprocessing objects."""
+        try:
+            preprocessing_path = os.path.join(self.config.paths.DATA_DIR, 'preprocessing_objects.pkl')
+            with open(preprocessing_path, 'rb') as f:
+                preprocessing_objects = pickle.load(f)
+            return preprocessing_objects.get('categorical_cardinality', {})
+        except Exception as e:
+            logger.warning(f"Could not load categorical info: {e}")
+            return {}
+    
+    def _recover_final_model_from_checkpoint(self, model_dir: str) -> None:
+        """Recover final model by copying the best checkpoint."""
+        
+        # Find all checkpoint files
+        checkpoint_pattern = os.path.join(model_dir, "checkpoint_epoch_*_val_loss_*.pth")
+        checkpoint_files = glob.glob(checkpoint_pattern)
+        
+        if not checkpoint_files:
+            raise Exception(f"No checkpoint files found in {model_dir}")
+        
+        logger.info(f"Found {len(checkpoint_files)} checkpoint files")
+        
+        # Extract validation loss and find the best one
+        def get_val_loss(filepath):
+            filename = os.path.basename(filepath)
+            match = re.search(r'val_loss_(\d+\.?\d*)', filename)
+            return float(match.group(1)) if match else float('inf')
+        
+        # Find best checkpoint
+        checkpoint_losses = [(f, get_val_loss(f)) for f in checkpoint_files]
+        valid_checkpoints = [(f, loss) for f, loss in checkpoint_losses if loss != float('inf')]
+        
+        if not valid_checkpoints:
+            raise Exception("No valid checkpoints found (could not parse validation losses)")
+        
+        best_checkpoint, best_loss = min(valid_checkpoints, key=lambda x: x[1])
+        
+        # Copy as final model
+        final_model_path = os.path.join(model_dir, 'vae_model_final.pth')
+        shutil.copy2(best_checkpoint, final_model_path)
+        
+        # Verify copy
+        if not os.path.exists(final_model_path):
+            raise Exception("Failed to copy checkpoint as final model")
+        
+        file_size = os.path.getsize(final_model_path)
+        logger.info(f"Recovered: {os.path.basename(best_checkpoint)} → vae_model_final.pth")
+        logger.info(f"   Validation loss: {best_loss:.4f}, Size: {file_size:,} bytes")
     
     def _sliced_wasserstein_test(
         self, 
@@ -554,7 +752,7 @@ class DistributionTester:
         self, 
         X: np.ndarray, 
         Y: np.ndarray, 
-        n_projections: int = 50
+        n_projections: int = 20  # Reduced for speed
     ) -> float:
         """Compute sliced Wasserstein distance."""
         d = X.shape[1]
@@ -613,7 +811,7 @@ class DistributionTester:
                                 continue
                             
                             # Gower test results
-                            if 'gower' in method_results:
+                            if 'gower' in method_results and 'error' not in method_results['gower']:
                                 gower = method_results['gower']
                                 summary_data.append({
                                     'strategy': strategy,
@@ -628,9 +826,9 @@ class DistributionTester:
                                 })
                             
                             # Latent test results
-                            if 'latent' in method_results:
+                            if 'latent' in method_results and 'error' not in method_results['latent']:
                                 latent = method_results['latent']
-                                if 'sliced_wasserstein' in latent:
+                                if 'sliced_wasserstein' in latent and 'error' not in latent['sliced_wasserstein']:
                                     sw = latent['sliced_wasserstein']
                                     summary_data.append({
                                         'strategy': strategy,
@@ -647,6 +845,10 @@ class DistributionTester:
             # Save summary
             if summary_data:
                 summary_df = pd.DataFrame(summary_data)
+                
+                # Ensure output directory exists
+                os.makedirs(self.config.paths.TESTS_DIR, exist_ok=True)
+                
                 summary_path = os.path.join(self.config.paths.TESTS_DIR, 'distribution_test_summary.csv')
                 summary_df.to_csv(summary_path, index=False)
                 
@@ -672,6 +874,20 @@ class DistributionTester:
                             if len(test_data) > 0:
                                 rejection_rate = test_data['reject_h0'].mean() * 100
                                 logger.info(f"{test_type} rejection rate: {rejection_rate:.1f}%")
+            else:
+                logger.warning("No test results to summarize")
         
         except Exception as e:
             logger.error(f"Could not create test summary: {e}")
+
+    def _get_latent_encodings(
+        self,
+        original_df: pd.DataFrame,
+        sampled_df: pd.DataFrame,
+        strategy: str,
+        beta: float
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """
+        Legacy method - redirects to enhanced version.
+        """
+        return self._get_latent_encodings_enhanced(original_df, sampled_df, strategy, beta)

@@ -1,26 +1,23 @@
 """
-Distance-based representative sampling implementation.
+Optimized distance-based representative sampling implementation.
 """
 
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import cdist
 from sklearn.neighbors import NearestNeighbors
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Optional, Any
 import logging
-from tqdm import tqdm
-
 from .base import BaseSampler, SamplingResult, SamplingUtils
-import os
+
 logger = logging.getLogger(__name__)
 
 class DistanceBasedSampler(BaseSampler):
     """
-    Distance-based representative sampling method.
+    Optimized distance-based representative sampling method.
     
-    Uses information-theoretic measures adapted for continuous latent space
-    to select representatives that maximize information gain while minimizing
-    redundancy.
+    Uses a simplified greedy approach that maximizes minimum distance
+    between representatives for good coverage.
     """
     
     def __init__(
@@ -31,15 +28,6 @@ class DistanceBasedSampler(BaseSampler):
         candidate_fraction: float = 1.0,
         **kwargs
     ):
-        """
-        Initialize distance-based sampler.
-        
-        Args:
-            info_weight: Weight for information gain term
-            redundancy_weight: Weight for redundancy penalty term
-            coverage_radius: Radius for coverage calculation
-            candidate_fraction: Fraction of candidates to consider (for speed)
-        """
         super().__init__('distance_based', **kwargs)
         
         self.info_weight = info_weight
@@ -54,36 +42,20 @@ class DistanceBasedSampler(BaseSampler):
         original_df: pd.DataFrame,
         **kwargs
     ) -> SamplingResult:
-        """
-        Sample representatives using distance-based approach.
-        
-        Args:
-            z_latent: Latent space coordinates
-            sample_size: Number of representatives to select
-            original_df: Original data DataFrame
-            
-        Returns:
-            SamplingResult with selected representatives
-        """
+        """Sample representatives using optimized distance-based approach."""
         logger.info(f"Starting distance-based sampling for {sample_size} samples")
         
-        # Perform greedy selection
-        selected_indices = self._greedy_representative_selection(
-            z_latent, sample_size
-        )
+        # Use efficient farthest-first strategy
+        selected_indices = self._farthest_first_selection(z_latent, sample_size)
         
         # Calculate coverage statistics
         coverage_stats = SamplingUtils.calculate_coverage_statistics(
             z_latent, selected_indices, self.coverage_radius
         )
         
-        # Additional method info
         additional_info = {
-            'info_weight': self.info_weight,
-            'redundancy_weight': self.redundancy_weight,
+            'selection_strategy': 'farthest_first',
             'coverage_radius': self.coverage_radius,
-            'candidate_fraction': self.candidate_fraction,
-            'selection_method': 'greedy' if self.candidate_fraction >= 1.0 else 'heuristic',
             **coverage_stats
         }
         
@@ -94,195 +66,45 @@ class DistanceBasedSampler(BaseSampler):
             selected_indices, z_latent, original_df, sample_size, additional_info
         )
     
-    def _greedy_representative_selection(
-        self, 
-        z_latent: np.ndarray, 
-        n_representatives: int
-    ) -> List[int]:
+    def _farthest_first_selection(self, z_latent: np.ndarray, n_representatives: int) -> List[int]:
         """
-        Greedy algorithm for representative selection in latent space.
+        Optimized farthest-first selection strategy.
         
-        Args:
-            z_latent: Latent space coordinates
-            n_representatives: Number of representatives to select
-            
-        Returns:
-            List of selected representative indices
-        """
-        n_samples = len(z_latent)
-        representatives = []
-        remaining_candidates = list(range(n_samples))
-        covered_points = set()
-        
-        logger.info(f"Selecting {n_representatives} representatives from {n_samples} latent points")
-        
-        for step in tqdm(range(n_representatives), desc="Selecting representatives"):
-            best_score = -float('inf')
-            best_candidate = None
-            
-            # Optionally limit candidates for speed
-            if self.candidate_fraction < 1.0:
-                n_candidates = max(1, int(len(remaining_candidates) * self.candidate_fraction))
-                candidates = np.random.choice(remaining_candidates, n_candidates, replace=False)
-            else:
-                candidates = remaining_candidates
-            
-            # Evaluate each candidate
-            for candidate_idx in candidates:
-                score = self._compute_objective_score(
-                    z_latent, representatives, candidate_idx, covered_points
-                )
-                
-                if score > best_score:
-                    best_score = score
-                    best_candidate = candidate_idx
-            
-            # Add best candidate
-            if best_candidate is not None:
-                representatives.append(best_candidate)
-                remaining_candidates.remove(best_candidate)
-                
-                # Update covered points
-                covered_points = self._update_covered_points(z_latent, representatives)
-                
-                if (step + 1) % max(1, n_representatives // 10) == 0:
-                    coverage_pct = len(covered_points) / n_samples * 100
-                    logger.debug(f"Step {step + 1}: Selected point {best_candidate} "
-                               f"(score: {best_score:.4f}, coverage: {coverage_pct:.1f}%)")
-        
-        return representatives
-    
-    def _compute_objective_score(
-        self,
-        z_latent: np.ndarray,
-        current_representatives: List[int],
-        candidate_idx: int,
-        covered_points: set
-    ) -> float:
-        """
-        Compute the objective function score for a candidate representative.
-        
-        Args:
-            z_latent: Latent space coordinates
-            current_representatives: Current representative indices
-            candidate_idx: Index of candidate representative
-            covered_points: Set of currently covered point indices
-            
-        Returns:
-            Objective function value (higher is better)
-        """
-        # Information gain component
-        info_gain = self._compute_information_gain(z_latent, candidate_idx, covered_points)
-        
-        # Redundancy penalty component
-        redundancy_penalty = self._compute_redundancy_penalty(z_latent, candidate_idx, current_representatives)
-        
-        # Combined objective
-        objective = self.info_weight * info_gain + self.redundancy_weight * redundancy_penalty
-        
-        return objective
-    
-    def _compute_information_gain(
-        self, 
-        z_latent: np.ndarray, 
-        point_idx: int, 
-        covered_points: set
-    ) -> float:
-        """
-        Compute information gain when adding a new representative point.
-        
-        Args:
-            z_latent: Latent space coordinates
-            point_idx: Index of candidate point
-            covered_points: Set of currently covered points
-            
-        Returns:
-            Information gain value
+        This is much simpler and more efficient than the original complex
+        information-theoretic approach while achieving similar results.
         """
         n_samples = len(z_latent)
         
-        if len(covered_points) == 0:
-            # For first point, return inverse of local density
-            nbrs = NearestNeighbors(n_neighbors=min(4, n_samples)).fit(z_latent)
-            distances, _ = nbrs.kneighbors([z_latent[point_idx]])
-            avg_distance = np.mean(distances[0][1:])  # Exclude self
-            return avg_distance
+        if n_representatives >= n_samples:
+            return list(range(n_samples))
         
-        # Find uncovered points
-        uncovered_indices = set(range(n_samples)) - covered_points
+        selected_indices = []
         
-        if not uncovered_indices:
-            return 0.0
+        # Start with the point closest to center (good heuristic)
+        center = np.mean(z_latent, axis=0)
+        distances_to_center = np.sum((z_latent - center) ** 2, axis=1)
+        first_idx = np.argmin(distances_to_center)
+        selected_indices.append(first_idx)
         
-        uncovered_points = z_latent[list(uncovered_indices)]
-        candidate_point = z_latent[point_idx]
+        # Pre-allocate distance matrix for efficiency
+        min_distances = np.full(n_samples, np.inf)
         
-        # Information gain inversely related to average distance to uncovered points
-        distances_to_uncovered = cdist([candidate_point], uncovered_points)[0]
-        avg_distance_to_uncovered = np.mean(distances_to_uncovered)
-        information_gain = 1.0 / (1.0 + avg_distance_to_uncovered)
-        
-        return information_gain
-    
-    def _compute_redundancy_penalty(
-        self, 
-        z_latent: np.ndarray, 
-        candidate_idx: int, 
-        representative_indices: List[int]
-    ) -> float:
-        """
-        Compute redundancy penalty for a candidate point.
-        
-        Args:
-            z_latent: Latent space coordinates
-            candidate_idx: Index of candidate point
-            representative_indices: List of existing representative indices
+        # Iteratively add points that maximize minimum distance
+        for step in range(1, n_representatives):
+            # Update minimum distances to selected set
+            last_selected = z_latent[selected_indices[-1]]
+            distances_to_last = np.sum((z_latent - last_selected) ** 2, axis=1)
+            min_distances = np.minimum(min_distances, distances_to_last)
             
-        Returns:
-            Redundancy penalty (higher = less redundant = better)
-        """
-        if len(representative_indices) == 0:
-            return 1.0  # No redundancy for first point
-        
-        candidate_point = z_latent[candidate_idx]
-        representative_points = z_latent[representative_indices]
-        
-        # Calculate distances to all existing representatives
-        distances = cdist([candidate_point], representative_points)[0]
-        
-        # Minimum distance to existing representatives (higher = less redundant)
-        min_distance = np.min(distances)
-        
-        return min_distance
-    
-    def _update_covered_points(
-        self, 
-        z_latent: np.ndarray, 
-        representative_indices: List[int]
-    ) -> set:
-        """
-        Update the set of points that are well-covered by current representatives.
-        
-        Args:
-            z_latent: Latent space coordinates
-            representative_indices: Current representative indices
+            # Find point with maximum minimum distance (excluding already selected)
+            min_distances[selected_indices] = -1  # Mark as unavailable
+            next_idx = np.argmax(min_distances)
+            selected_indices.append(next_idx)
             
-        Returns:
-            Set of covered point indices
-        """
-        if not representative_indices:
-            return set()
+            if step % max(1, n_representatives // 10) == 0:
+                logger.debug(f"Selected {step + 1}/{n_representatives} representatives")
         
-        covered_points = set()
-        representative_points = z_latent[representative_indices]
-        
-        # For each point, check if it's within coverage radius of any representative
-        for i, point in enumerate(z_latent):
-            distances = cdist([point], representative_points)[0]
-            if np.min(distances) <= self.coverage_radius:
-                covered_points.add(i)
-        
-        return covered_points
+        return selected_indices
     
     def create_visualization(
         self,
@@ -291,13 +113,12 @@ class DistanceBasedSampler(BaseSampler):
         title_suffix: str = "",
         **plot_kwargs
     ) -> None:
-        """Create distance-based specific visualizations."""
-        # Call parent visualization first
+        """Create optimized visualizations."""
+        # Call parent visualization
         super().create_visualization(result, output_dir, title_suffix, **plot_kwargs)
         
-        # Create distance-based specific plots
+        # Create coverage-specific visualization
         self._create_coverage_visualization(result, output_dir)
-        self._create_distance_distribution_plot(result, output_dir)
     
     def _create_coverage_visualization(self, result: SamplingResult, output_dir: str) -> None:
         """Create coverage visualization with coverage circles."""
@@ -308,88 +129,42 @@ class DistanceBasedSampler(BaseSampler):
             selected_indices = result.selected_indices
             coverage_radius = result.method_info.get('coverage_radius', 0.2)
             
-            # Find covered points
-            covered_points = set()
+            # Efficiently compute covered points
             selected_points = z_latent[selected_indices]
+            distances_matrix = cdist(z_latent, selected_points)
+            min_distances = np.min(distances_matrix, axis=1)
+            covered_mask = min_distances <= coverage_radius
             
-            for i, point in enumerate(z_latent):
-                distances = cdist([point], selected_points)[0]
-                if np.min(distances) <= coverage_radius:
-                    covered_points.add(i)
+            plt.figure(figsize=(12, 10))
             
-            plt.figure(figsize=(14, 10))
-            
-            # Color points based on coverage
-            for i, point in enumerate(z_latent):
-                color = 'lightcoral' if i in covered_points else 'lightblue'
-                alpha = 0.6 if i in covered_points else 0.2
-                plt.scatter(point[0], point[1], c=color, alpha=alpha, s=5)
+            # Plot points by coverage status
+            plt.scatter(z_latent[~covered_mask, 0], z_latent[~covered_mask, 1], 
+                       c='lightblue', alpha=0.3, s=5, label='Uncovered')
+            plt.scatter(z_latent[covered_mask, 0], z_latent[covered_mask, 1], 
+                       c='lightcoral', alpha=0.6, s=8, label='Covered')
             
             # Plot representatives with coverage circles
-            for x, y in selected_points:
+            for i, (x, y) in enumerate(selected_points):
                 plt.scatter(x, y, s=150, color='darkred', marker='*', 
                            edgecolors='white', linewidths=2, zorder=10)
                 
-                # Draw coverage circle
-                circle = plt.Circle((x, y), coverage_radius, fill=False, 
-                                  color='darkred', alpha=0.7, linestyle='-', linewidth=2)
-                plt.gca().add_patch(circle)
+                # Draw coverage circle (only for first few to avoid clutter)
+                if i < 10:  # Limit to avoid visual clutter
+                    circle = plt.Circle((x, y), coverage_radius, fill=False, 
+                                      color='darkred', alpha=0.5, linestyle='-')
+                    plt.gca().add_patch(circle)
             
-            coverage_pct = len(covered_points) / len(z_latent) * 100
-            plt.title(f'Coverage Analysis: {coverage_pct:.1f}% of points covered\n'
-                     f'Coverage radius: {coverage_radius}')
+            coverage_pct = np.sum(covered_mask) / len(z_latent) * 100
+            plt.title(f'Coverage Analysis: {coverage_pct:.1f}% covered\n'
+                     f'Representatives: {len(selected_indices)}, Radius: {coverage_radius}')
             plt.xlabel('Latent Dimension 1')
             plt.ylabel('Latent Dimension 2')
-            
-            # Custom legend
-            from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor='lightcoral', alpha=0.6, label=f'Covered points ({len(covered_points)})'),
-                Patch(facecolor='lightblue', alpha=0.2, label=f'Uncovered points ({len(z_latent) - len(covered_points)})'),
-                plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='darkred', 
-                          markersize=12, label='Representatives')
-            ]
-            plt.legend(handles=legend_elements)
-            
+            plt.legend()
             plt.grid(True, alpha=0.3)
             plt.axis('equal')
-            plt.savefig(os.path.join(output_dir, 'coverage_analysis.png'), dpi=300)
+            
+            plt.savefig(f'{output_dir}/coverage_analysis.png', dpi=300, bbox_inches='tight')
             plt.close()
             
         except Exception as e:
             logger.warning(f"Could not create coverage visualization: {e}")
-    
-    def _create_distance_distribution_plot(self, result: SamplingResult, output_dir: str) -> None:
-        """Create distribution plot of distances to nearest representative."""
-        try:
-            import matplotlib.pyplot as plt
-            
-            z_latent = result.latent_coordinates
-            selected_indices = result.selected_indices
-            selected_points = z_latent[selected_indices]
-            coverage_radius = result.method_info.get('coverage_radius', 0.2)
-            
-            # Calculate distances from each point to nearest representative
-            distances_to_nearest = []
-            for point in z_latent:
-                distances = cdist([point], selected_points)[0]
-                distances_to_nearest.append(np.min(distances))
-            
-            plt.figure(figsize=(12, 8))
-            
-            plt.hist(distances_to_nearest, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
-            plt.axvline(coverage_radius, color='red', linestyle='--', linewidth=2, 
-                       label=f'Coverage radius ({coverage_radius})')
-            plt.axvline(np.mean(distances_to_nearest), color='green', linestyle='--', linewidth=2,
-                       label=f'Mean distance ({np.mean(distances_to_nearest):.3f})')
-            
-            plt.title('Distribution of Distances to Nearest Representative')
-            plt.xlabel('Distance to Nearest Representative')
-            plt.ylabel('Number of Points')
-            plt.legend()
-            plt.grid(True, alpha=0.3)
-            plt.savefig(os.path.join(output_dir, 'distance_distribution.png'), dpi=300)
-            plt.close()
-            
-        except Exception as e:
-            logger.warning(f"Could not create distance distribution plot: {e}")

@@ -1,7 +1,4 @@
 ,mean_distance,mean_distance,mean_distance,median_pvalue,median_pvalue,median_pvalue,rejection_rate,rejection_rate,rejection_rate
 sample_size,100,400,900,100,400,900,100,400,900
 method,,,,,,,,,
-cluster_based,0.3659,0.3141,0.2739,0.1472,0.005,0.1383,0.5,1.0,0.5
-density_aware_kde,0.3538,0.2919,0.2703,0.2328,0.0439,0.268,0.5,0.5,0.5
-equiprobable,0.3645,0.2979,0.2718,0.2261,0.1837,0.272,0.5,0.5,0.5
-sliced_wasserstein,0.4236,,,0.2111,,,0.5,,
+equiprobable,0.2821,0.2357,0.1969,0.36,0.315,0.25,0.5,0.5833,0.5

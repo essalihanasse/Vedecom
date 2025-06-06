@@ -1,365 +1,377 @@
-# utils/__init__.py
 """
-Utility modules for the VAE pipeline.
-"""
-
-from .math_utils import *
-from .file_utils import *
-
-# utils/math_utils.py
-"""
-Mathematical utility functions for the VAE pipeline.
-"""
-
-import numpy as np
-import torch
-from typing import Union, Tuple, List, Optional
-import math
-
-def set_random_seeds(seed: int = 42) -> None:
-    """
-    Set random seeds for reproducibility.
-    
-    Args:
-        seed: Random seed value
-    """
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-def calculate_grid_dimensions(sample_size: int) -> Tuple[int, int]:
-    """
-    Calculate optimal grid dimensions for a given sample size.
-    
-    Args:
-        sample_size: Number of samples
-        
-    Returns:
-        Tuple of (rows, cols)
-    """
-    # For perfect squares, use square grid
-    sqrt_size = int(math.sqrt(sample_size))
-    if sqrt_size * sqrt_size == sample_size:
-        return sqrt_size, sqrt_size
-    
-    # Find closest factorization
-    best_diff = float('inf')
-    best_rows, best_cols = 1, sample_size
-    
-    for i in range(1, int(math.sqrt(sample_size)) + 1):
-        if sample_size % i == 0:
-            rows, cols = i, sample_size // i
-            diff = abs(rows - cols)
-            if diff < best_diff:
-                best_diff = diff
-                best_rows, best_cols = rows, cols
-    
-    return best_rows, best_cols
-
-def normalize_array(arr: np.ndarray, method: str = 'zscore') -> np.ndarray:
-    """
-    Normalize array using different methods.
-    
-    Args:
-        arr: Input array
-        method: Normalization method ('zscore', 'minmax', 'unit')
-        
-    Returns:
-        Normalized array
-    """
-    if method == 'zscore':
-        return (arr - np.mean(arr)) / np.std(arr)
-    elif method == 'minmax':
-        return (arr - np.min(arr)) / (np.max(arr) - np.min(arr))
-    elif method == 'unit':
-        return arr / np.linalg.norm(arr)
-    else:
-        raise ValueError(f"Unknown normalization method: {method}")
-
-def safe_log(x: Union[np.ndarray, torch.Tensor], eps: float = 1e-8) -> Union[np.ndarray, torch.Tensor]:
-    """
-    Safe logarithm that avoids log(0).
-    
-    Args:
-        x: Input values
-        eps: Small epsilon to add for numerical stability
-        
-    Returns:
-        Safe logarithm of x
-    """
-    if isinstance(x, torch.Tensor):
-        return torch.log(torch.clamp(x, min=eps))
-    else:
-        return np.log(np.maximum(x, eps))
-
-def compute_kl_divergence(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-    """
-    Compute KL divergence for VAE.
-    
-    Args:
-        mu: Mean of latent distribution
-        logvar: Log variance of latent distribution
-        
-    Returns:
-        KL divergence
-    """
-    return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-
-def batch_pairwise_distances(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    """
-    Compute pairwise distances between two sets of points.
-    
-    Args:
-        x: First set of points (batch_size, dim)
-        y: Second set of points (batch_size, dim)
-        
-    Returns:
-        Pairwise distances
-    """
-    return torch.cdist(x, y)
-
-def entropy_from_probabilities(probs: np.ndarray, axis: int = -1) -> np.ndarray:
-    """
-    Compute entropy from probability distributions.
-    
-    Args:
-        probs: Probability distributions
-        axis: Axis along which to compute entropy
-        
-    Returns:
-        Entropy values
-    """
-    return -np.sum(probs * safe_log(probs), axis=axis)
-
-# utils/file_utils.py
-"""
-File handling utilities for the VAE pipeline.
+Optimized model training system for VAE pipeline.
 """
 
 import os
-import json
-import pickle
+import torch
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 import pandas as pd
 import numpy as np
-from typing import Any, Dict, List, Optional, Union
-from pathlib import Path
-import shutil
+import matplotlib.pyplot as plt
+import pickle
+from sklearn.model_selection import train_test_split
+import time
+from datetime import timedelta
+from typing import Dict, List, Tuple, Optional, Any
 import logging
+
+from models.vae import VAE, VAELoss, BetaScheduler, create_model
+from models.callbacks import EarlyStopping, ModelCheckpoint, CallbackList
 
 logger = logging.getLogger(__name__)
 
-def ensure_dir(path: Union[str, Path]) -> None:
-    """
-    Ensure directory exists, create if necessary.
+class ModelTrainer:
+    """Handles training of VAE models with different configurations."""
     
-    Args:
-        path: Directory path
-    """
-    os.makedirs(path, exist_ok=True)
-
-def safe_filename(filename: str) -> str:
-    """
-    Create safe filename by removing problematic characters.
-    
-    Args:
-        filename: Original filename
+    def __init__(self, config):
+        self.config = config
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        logger.info(f"Using device: {self.device}")
         
-    Returns:
-        Safe filename
-    """
-    import re
-    # Remove or replace problematic characters
-    safe_name = re.sub(r'[<>:"/\\|?*]', '_', filename)
-    safe_name = re.sub(r'[^\w\-_\.]', '_', safe_name)
-    return safe_name
-
-def save_json(data: Dict[str, Any], filepath: Union[str, Path]) -> None:
-    """
-    Save dictionary as JSON file.
-    
-    Args:
-        data: Dictionary to save
-        filepath: Output file path
-    """
-    ensure_dir(os.path.dirname(filepath))
-    
-    # Convert numpy types to Python types for JSON serialization
-    def convert_numpy(obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return obj
-    
-    serializable_data = {}
-    for key, value in data.items():
-        serializable_data[key] = convert_numpy(value)
-    
-    with open(filepath, 'w') as f:
-        json.dump(serializable_data, f, indent=2)
-
-def load_json(filepath: Union[str, Path]) -> Dict[str, Any]:
-    """
-    Load JSON file as dictionary.
-    
-    Args:
-        filepath: Input file path
+        # Set random seeds
+        self._set_random_seeds()
         
-    Returns:
-        Loaded dictionary
-    """
-    with open(filepath, 'r') as f:
-        return json.load(f)
-
-def save_pickle(obj: Any, filepath: Union[str, Path]) -> None:
-    """
-    Save object as pickle file.
-    
-    Args:
-        obj: Object to save
-        filepath: Output file path
-    """
-    ensure_dir(os.path.dirname(filepath))
-    
-    with open(filepath, 'wb') as f:
-        pickle.dump(obj, f)
-
-def load_pickle(filepath: Union[str, Path]) -> Any:
-    """
-    Load pickle file.
-    
-    Args:
-        filepath: Input file path
+        # Setup data
+        self.train_loader, self.val_loader = self._setup_data_loaders()
         
-    Returns:
-        Loaded object
-    """
-    with open(filepath, 'rb') as f:
-        return pickle.load(f)
-
-def copy_file(src: Union[str, Path], dst: Union[str, Path]) -> None:
-    """
-    Copy file from source to destination.
+    def _set_random_seeds(self, seed: int = 42) -> None:
+        """Set random seeds for reproducibility."""
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
     
-    Args:
-        src: Source file path
-        dst: Destination file path
-    """
-    ensure_dir(os.path.dirname(dst))
-    shutil.copy2(src, dst)
-
-def find_files(directory: Union[str, Path], pattern: str = "*", recursive: bool = True) -> List[Path]:
-    """
-    Find files matching pattern in directory.
-    
-    Args:
-        directory: Directory to search
-        pattern: File pattern (glob style)
-        recursive: Whether to search recursively
+    def _setup_data_loaders(self) -> Tuple[DataLoader, DataLoader]:
+        """Setup training and validation data loaders."""
+        # Load data
+        df_prepared = pd.read_csv(self.config.paths.PREPROCESSED_FILE)
         
-    Returns:
-        List of matching file paths
-    """
-    directory = Path(directory)
-    
-    if recursive:
-        return list(directory.rglob(pattern))
-    else:
-        return list(directory.glob(pattern))
-
-def get_file_size(filepath: Union[str, Path]) -> int:
-    """
-    Get file size in bytes.
-    
-    Args:
-        filepath: File path
+        with open(os.path.join(self.config.paths.DATA_DIR, 'preprocessing_objects.pkl'), 'rb') as f:
+            self.preprocessing_objects = pickle.load(f)
         
-    Returns:
-        File size in bytes
-    """
-    return os.path.getsize(filepath)
-
-def cleanup_directory(directory: Union[str, Path], keep_latest: int = 5, pattern: str = "*.pth") -> None:
-    """
-    Clean up directory by keeping only the latest N files matching pattern.
-    
-    Args:
-        directory: Directory to clean
-        keep_latest: Number of latest files to keep
-        pattern: File pattern to match
-    """
-    files = find_files(directory, pattern, recursive=False)
-    
-    if len(files) <= keep_latest:
-        return
-    
-    # Sort by modification time, newest first
-    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-    
-    # Remove old files
-    for file_path in files[keep_latest:]:
-        try:
-            file_path.unlink()
-            logger.info(f"Removed old file: {file_path}")
-        except Exception as e:
-            logger.warning(f"Could not remove file {file_path}: {e}")
-
-def archive_directory(source_dir: Union[str, Path], archive_path: Union[str, Path]) -> None:
-    """
-    Create archive of directory.
-    
-    Args:
-        source_dir: Directory to archive
-        archive_path: Path for the archive file (without extension)
-    """
-    shutil.make_archive(str(archive_path), 'zip', str(source_dir))
-    logger.info(f"Created archive: {archive_path}.zip")
-
-class CSVLogger:
-    """Simple CSV logger for tracking metrics."""
-    
-    def __init__(self, filepath: Union[str, Path]):
-        self.filepath = Path(filepath)
-        self.columns = None
-        ensure_dir(self.filepath.parent)
-    
-    def log(self, data: Dict[str, Any]) -> None:
-        """Log data to CSV file."""
-        df = pd.DataFrame([data])
+        # Train/validation split
+        X_train, X_val = train_test_split(df_prepared.values, test_size=0.2, random_state=42)
         
-        if not self.filepath.exists():
-            # First write - create file with headers
-            df.to_csv(self.filepath, index=False)
-            self.columns = list(data.keys())
-        else:
-            # Append to existing file
-            df.to_csv(self.filepath, mode='a', header=False, index=False)
-    
-    def read(self) -> pd.DataFrame:
-        """Read the logged data."""
-        if self.filepath.exists():
-            return pd.read_csv(self.filepath)
-        else:
-            return pd.DataFrame()
-
-def create_experiment_directory(base_dir: Union[str, Path], experiment_name: str) -> Path:
-    """
-    Create directory for experiment with timestamp.
-    
-    Args:
-        base_dir: Base directory for experiments
-        experiment_name: Name of the experiment
+        # Create data loaders
+        train_dataset = TensorDataset(
+            torch.FloatTensor(X_train).to(self.device),
+            torch.FloatTensor(X_train).to(self.device)
+        )
+        val_dataset = TensorDataset(
+            torch.FloatTensor(X_val).to(self.device),
+            torch.FloatTensor(X_val).to(self.device)
+        )
         
-    Returns:
-        Path to created experiment directory
-    """
-    from datetime import datetime
+        train_loader = DataLoader(train_dataset, batch_size=self.config.model.BATCH_SIZE, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=self.config.model.BATCH_SIZE, shuffle=False)
+        
+        logger.info(f"Training samples: {len(X_train)}, Validation samples: {len(X_val)}")
+        return train_loader, val_loader
     
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    exp_dir = Path(base_dir) / f"{experiment_name}_{timestamp}"
-    ensure_dir(exp_dir)
+    def train_single_model(self, strategy: str, beta: float, save_dir: Optional[str] = None) -> Dict[str, Any]:
+        """Train a single VAE model."""
+        logger.info(f"Training model: strategy={strategy}, beta={beta}")
+        
+        if save_dir is None:
+            save_dir = os.path.join(self.config.paths.MODELS_DIR, strategy, f'beta_{beta}')
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Create model and training components
+        model = self._create_model()
+        optimizer = optim.Adam(model.parameters(), lr=self.config.model.LEARNING_RATE)
+        loss_fn = VAELoss(
+            self.preprocessing_objects['categorical_cardinality'],
+            len(self.preprocessing_objects['num_cols'])
+        )
+        
+        # Get beta schedule
+        beta_schedule = BetaScheduler.get_schedule(
+            beta_start=0.0, beta_end=beta, num_epochs=self.config.model.NUM_EPOCHS, strategy=strategy
+        )
+        
+        # Setup callbacks
+        callbacks = self._setup_callbacks(save_dir)
+        
+        # Training loop
+        training_results = self._training_loop(model, optimizer, loss_fn, beta_schedule, callbacks)
+        
+        # Save final model
+        self._save_model(model, optimizer, training_results, save_dir, strategy, beta)
+        
+        return training_results
     
-    return exp_dir
+    def train_all_models(self) -> Dict[str, Dict[str, Any]]:
+        """Train models for all strategy-beta combinations."""
+        all_results = {}
+        
+        total_models = len(self.config.training.ANNEALING_STRATEGIES) * len(self.config.training.BETA_VALUES)
+        current_model = 0
+        
+        for strategy in self.config.training.ANNEALING_STRATEGIES:
+            strategy_results = {}
+            
+            for beta in self.config.training.BETA_VALUES:
+                current_model += 1
+                logger.info(f"\n🧠 Training model {current_model}/{total_models}")
+                
+                try:
+                    results = self.train_single_model(strategy, beta)
+                    strategy_results[beta] = results
+                except Exception as e:
+                    logger.error(f"Failed to train model {strategy}-{beta}: {e}")
+                    strategy_results[beta] = {'error': str(e)}
+            
+            all_results[strategy] = strategy_results
+            self._create_strategy_summary(strategy, strategy_results)
+        
+        return all_results
+    
+    def _create_model(self) -> VAE:
+        """Create VAE model instance."""
+        return create_model(
+            input_dim=len(self.train_loader.dataset[0][0]),
+            num_numerical=len(self.preprocessing_objects['num_cols']),
+            cat_dict=self.preprocessing_objects['categorical_cardinality'],
+            hidden_dim=self.config.model.HIDDEN_DIM,
+            latent_dim=self.config.model.LATENT_DIM
+        ).to(self.device)
+    
+    def _setup_callbacks(self, save_dir: str) -> CallbackList:
+        """Setup training callbacks."""
+        callbacks = []
+        
+        # Early stopping
+        if self.config.training.EARLY_STOPPING:
+            callbacks.append(EarlyStopping(
+                monitor='val_loss',
+                min_delta=self.config.training.EARLY_STOPPING_MIN_DELTA,
+                patience=self.config.training.EARLY_STOPPING_PATIENCE,
+                verbose=True,
+                restore_best_weights=self.config.training.RESTORE_BEST_WEIGHTS
+            ))
+        
+        # Model checkpoint
+        callbacks.append(ModelCheckpoint(
+            filepath=os.path.join(save_dir, 'checkpoint_epoch_{epoch:03d}_val_loss_{val_loss:.4f}.pth'),
+            monitor=self.config.training.CHECKPOINT_MONITOR,
+            save_best_only=self.config.training.SAVE_BEST_ONLY,
+            mode=self.config.training.CHECKPOINT_MODE
+        ))
+        
+        return CallbackList(callbacks)
+    
+    def _training_loop(self, model: VAE, optimizer: torch.optim.Optimizer, 
+                      loss_fn: VAELoss, beta_schedule: List[float], 
+                      callbacks: CallbackList) -> Dict[str, Any]:
+        """Consolidated training loop for both training and validation."""
+        history = {
+            'train_loss': [], 'val_loss': [], 'num_loss': [], 
+            'cat_loss': [], 'kl_loss': [], 'beta_values': []
+        }
+        
+        callbacks.set_model(model)
+        callbacks.on_train_begin()
+        
+        start_time = time.time()
+        
+        for epoch in range(self.config.model.NUM_EPOCHS):
+            current_beta = beta_schedule[epoch]
+            callbacks.on_epoch_begin(epoch)
+            
+            # Training phase
+            train_metrics = self._run_epoch(model, self.train_loader, optimizer, loss_fn, current_beta, is_training=True)
+            
+            # Validation phase  
+            val_metrics = self._run_epoch(model, self.val_loader, None, loss_fn, current_beta, is_training=False)
+            
+            # Update history
+            history['train_loss'].append(train_metrics['total_loss'])
+            history['val_loss'].append(val_metrics['total_loss'])
+            history['num_loss'].append(train_metrics['num_loss'])
+            history['cat_loss'].append(train_metrics['cat_loss'])
+            history['kl_loss'].append(train_metrics['kl_loss'])
+            history['beta_values'].append(current_beta)
+            
+            # Logging
+            if (epoch + 1) % 10 == 0 or epoch == self.config.model.NUM_EPOCHS - 1:
+                logger.info(f'Epoch {epoch+1}/{self.config.model.NUM_EPOCHS}: '
+                          f'Train: {train_metrics["total_loss"]:.4f}, '
+                          f'Val: {val_metrics["total_loss"]:.4f}, Beta: {current_beta:.2f}')
+            
+            # Callback logging
+            logs = {
+                'loss': train_metrics['total_loss'], 'val_loss': val_metrics['total_loss'],
+                'num_loss': train_metrics['num_loss'], 'cat_loss': train_metrics['cat_loss'],
+                'kl_loss': train_metrics['kl_loss'], 'beta': current_beta
+            }
+            
+            callbacks.on_epoch_end(epoch, logs)
+            
+            if callbacks.get_stop_training():
+                logger.info(f"Early stopping triggered at epoch {epoch + 1}")
+                break
+        
+        callbacks.on_train_end()
+        
+        # Save results
+        training_time = time.time() - start_time
+        self._save_training_artifacts(history, os.path.dirname(callbacks.callbacks[0].filepath))
+        
+        return {
+            'history': history,
+            'training_time': training_time,
+            'epochs_trained': epoch + 1,
+            'final_metrics': {
+                'train_loss': history['train_loss'][-1],
+                'val_loss': history['val_loss'][-1]
+            }
+        }
+    
+    def _run_epoch(self, model: VAE, data_loader: DataLoader, optimizer: Optional[torch.optim.Optimizer],
+                  loss_fn: VAELoss, beta: float, is_training: bool) -> Dict[str, float]:
+        """Unified epoch runner for training and validation."""
+        model.train() if is_training else model.eval()
+        
+        total_loss = num_loss = cat_loss = kl_loss = 0
+        
+        context = torch.enable_grad() if is_training else torch.no_grad()
+        
+        with context:
+            for data, _ in data_loader:
+                if is_training:
+                    optimizer.zero_grad()
+                
+                # Forward pass
+                decoded_outputs, mu, logvar = model(data)
+                loss, n_loss, c_loss, k_loss = loss_fn(decoded_outputs, data, mu, logvar, beta)
+                
+                if is_training:
+                    loss.backward()
+                    optimizer.step()
+                
+                # Accumulate losses
+                total_loss += loss.item()
+                num_loss += n_loss.item()
+                cat_loss += c_loss.item()
+                kl_loss += k_loss.item()
+        
+        # Average by number of samples
+        n_samples = len(data_loader.dataset)
+        return {
+            'total_loss': total_loss / n_samples,
+            'num_loss': num_loss / n_samples,
+            'cat_loss': cat_loss / n_samples,
+            'kl_loss': kl_loss / n_samples
+        }
+    
+    def _save_model(self, model: VAE, optimizer: torch.optim.Optimizer, 
+                   training_results: Dict[str, Any], save_dir: str, strategy: str, beta: float) -> None:
+        """Save trained model and metadata."""
+        checkpoint = {
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'categorical_cardinality': self.preprocessing_objects['categorical_cardinality'],
+            'num_numerical': len(self.preprocessing_objects['num_cols']),
+            'input_dim': model.input_dim,
+            'hidden_dim': self.config.model.HIDDEN_DIM,
+            'latent_dim': self.config.model.LATENT_DIM,
+            'beta': beta,
+            'strategy': strategy,
+            'training_results': training_results,
+            'config': {
+                'batch_size': self.config.model.BATCH_SIZE,
+                'learning_rate': self.config.model.LEARNING_RATE,
+                'num_epochs': self.config.model.NUM_EPOCHS
+            }
+        }
+        
+        model_path = os.path.join(save_dir, 'vae_model_final.pth')
+        torch.save(checkpoint, model_path)
+        logger.info(f"Model saved to {model_path}")
+    
+    def _save_training_artifacts(self, history: Dict[str, List], save_dir: str) -> None:
+        """Save training history and create plots."""
+        # Save history
+        df = pd.DataFrame(history)
+        df['epoch'] = range(1, len(df) + 1)
+        df.to_csv(os.path.join(save_dir, 'training_history.csv'), index=False)
+        
+        # Create plots
+        self._create_training_plots(history, save_dir)
+    
+    def _create_training_plots(self, history: Dict[str, List], save_dir: str) -> None:
+        """Create consolidated training visualization plots."""
+        epochs = range(1, len(history['train_loss']) + 1)
+        
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+        
+        # Main losses with beta schedule
+        ax1.plot(epochs, history['train_loss'], 'b-', label='Training Loss')
+        ax1.plot(epochs, history['val_loss'], 'r-', label='Validation Loss')
+        ax1.set_xlabel('Epochs')
+        ax1.set_ylabel('Loss')
+        ax1.set_title('Training Progress')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Beta schedule on secondary y-axis
+        ax1_beta = ax1.twinx()
+        ax1_beta.plot(epochs, history['beta_values'], 'g--', alpha=0.7, label='Beta')
+        ax1_beta.set_ylabel('Beta Value', color='g')
+        ax1_beta.tick_params(axis='y', labelcolor='g')
+        
+        # Component losses
+        ax2.plot(epochs, history['num_loss'], 'g-', label='Numerical Loss')
+        ax2.plot(epochs, history['cat_loss'], 'm-', label='Categorical Loss')
+        ax2.plot(epochs, history['kl_loss'], 'c-', label='KL Loss')
+        ax2.set_xlabel('Epochs')
+        ax2.set_ylabel('Component Loss')
+        ax2.set_title('Loss Components')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, 'training_curves.png'), dpi=300)
+        plt.close()
+    
+    def _create_strategy_summary(self, strategy: str, strategy_results: Dict[str, Any]) -> None:
+        """Create summary for a single strategy."""
+        strategy_dir = os.path.join(self.config.paths.MODELS_DIR, strategy)
+        
+        summary_data = []
+        for beta, results in strategy_results.items():
+            if 'error' not in results:
+                final_metrics = results['final_metrics']
+                summary_data.append({
+                    'beta': beta,
+                    'train_loss': final_metrics['train_loss'],
+                    'val_loss': final_metrics['val_loss'],
+                    'training_time': results['training_time'],
+                    'epochs_trained': results['epochs_trained']
+                })
+        
+        if summary_data:
+            df = pd.DataFrame(summary_data)
+            df.to_csv(os.path.join(strategy_dir, 'beta_results_summary.csv'), index=False)
+            
+            # Create trade-off plot
+            self._create_tradeoff_plot(df, strategy_dir, strategy)
+    
+    def _create_tradeoff_plot(self, df: pd.DataFrame, strategy_dir: str, strategy: str) -> None:
+        """Create reconstruction vs KL trade-off plot."""
+        plt.figure(figsize=(10, 8))
+        
+        scatter = plt.scatter(df['val_loss'], df['train_loss'], s=100, c=df['beta'], cmap='viridis')
+        
+        for _, row in df.iterrows():
+            plt.annotate(f'β={row["beta"]}', (row['val_loss'], row['train_loss']),
+                        xytext=(10, 5), textcoords='offset points', fontsize=10)
+        
+        plt.colorbar(scatter, label='Beta Value')
+        plt.title(f'VAE Trade-off: Training vs Validation Loss ({strategy} annealing)')
+        plt.xlabel('Validation Loss')
+        plt.ylabel('Training Loss')
+        plt.grid(True, alpha=0.3)
+        plt.savefig(os.path.join(strategy_dir, 'vae_tradeoff.png'), dpi=300)
+        plt.close()

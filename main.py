@@ -1,5 +1,5 @@
 """
-Main orchestrator for the clean VAE pipeline.
+Main orchestrator for the clean VAE pipeline - OPTIMIZED VERSION
 """
 
 import os
@@ -7,9 +7,11 @@ import sys
 import time
 import argparse
 import logging
+import glob
+import re
+import shutil
 from datetime import timedelta
 from typing import List, Optional, Dict, Any
-from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -19,372 +21,403 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class VAEPipeline:
-    """
-    Main VAE pipeline orchestrator.
-    """
+    """Main VAE pipeline orchestrator."""
     
     def __init__(self, config_path: Optional[str] = None):
-        """
-        Initialize pipeline with configuration.
-        
-        Args:
-            config_path: Path to configuration file (optional)
-        """
-        # Import configuration
         try:
             from config.settings import config
             self.config = config
         except ImportError:
-            logger.error("Could not import configuration. Make sure config module is available.")
+            logger.error("Could not import configuration.")
             raise
         
         self.results = {}
         self.execution_times = {}
     
-    def run(
-        self,
-        stages: Optional[List[str]] = None,
-        strategy: Optional[str] = None,
-        beta: Optional[float] = None,
-        sampling_methods: Optional[List[str]] = None,
-        sampling_params: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """
-        Run the complete VAE pipeline.
-        
-        Args:
-            stages: List of stages to run (None for all)
-            strategy: Specific annealing strategy
-            beta: Specific beta value
-            sampling_methods: Sampling methods to use
-            sampling_params: Parameters for sampling methods
-            
-        Returns:
-            Dictionary with pipeline results
-        """
+    def run(self, stages: Optional[List[str]] = None, **kwargs) -> Dict[str, Any]:
+        """Run the complete VAE pipeline."""
         start_time = time.time()
         logger.info("🚀 Starting clean VAE pipeline...")
         
-        # Define all available stages
-        all_stages = ['preprocess', 'train', 'visualize', 'sample', 'test']
+        stages = stages or ['preprocess', 'train', 'visualize', 'sample', 'test']
         
-        if stages is None:
-            stages = all_stages
-        
-        # Set defaults
-        if sampling_methods is None:
-            sampling_methods = self.config.sampling.DEFAULT_METHODS
-        
-        if sampling_params is None:
-            sampling_params = self.config.get_sampling_params()
-        
-        # Override configuration if specific values provided
-        if strategy is not None:
-            self.config.training.ANNEALING_STRATEGIES = [strategy]
-        
-        if beta is not None:
-            self.config.training.BETA_VALUES = [beta]
+        # Override configuration with provided kwargs
+        self._update_config(kwargs)
         
         # Run stages
-        try:
-            for stage in stages:
-                logger.info(f"\n{'='*60}")
-                logger.info(f"🔄 Running stage: {stage.upper()}")
-                logger.info(f"{'='*60}")
-                
-                stage_start = time.time()
-                
-                if stage == 'preprocess':
-                    self._run_preprocessing()
-                elif stage == 'train':
-                    self._run_training()
-                elif stage == 'visualize':
-                    self._run_visualization()
-                elif stage == 'sample':
-                    self._run_sampling(sampling_methods, sampling_params)
-                elif stage == 'test':
-                    self._run_testing()
+        for stage in stages:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"🔄 Running stage: {stage.upper()}")
+            logger.info(f"{'='*60}")
+            
+            stage_start = time.time()
+            
+            try:
+                method_name = f'_run_{stage}'
+                if hasattr(self, method_name):
+                    getattr(self, method_name)(**kwargs)
                 else:
                     logger.warning(f"Unknown stage: {stage}")
                     continue
-                
+                    
                 stage_time = time.time() - stage_start
                 self.execution_times[stage] = stage_time
                 logger.info(f"✅ Stage {stage} completed in {timedelta(seconds=int(stage_time))}")
-        
-        except Exception as e:
-            logger.error(f"❌ Pipeline failed during {stage} stage: {e}")
-            raise
+                
+            except Exception as e:
+                logger.error(f"❌ Pipeline failed during {stage} stage: {e}")
+                raise
         
         total_time = time.time() - start_time
         self.execution_times['total'] = total_time
         
         logger.info(f"\n{'='*80}")
         logger.info("🎉 Pipeline completed successfully!")
-        logger.info(f"{'='*80}")
         logger.info(f"⏱️ Total execution time: {timedelta(seconds=int(total_time))}")
         
-        # Return summary
         return {
             'stages_completed': stages,
             'execution_times': self.execution_times,
-            'results': self.results,
-            'config_used': {
-                'sampling_methods': sampling_methods,
-                'sampling_params': sampling_params,
-                'beta_values': self.config.training.BETA_VALUES,
-                'strategies': self.config.training.ANNEALING_STRATEGIES
-            }
+            'results': self.results
         }
     
-    def _run_preprocessing(self) -> None:
+    def _update_config(self, kwargs: Dict[str, Any]) -> None:
+        """Update configuration with provided parameters."""
+        if kwargs.get('strategy'):
+            self.config.training.ANNEALING_STRATEGIES = [kwargs['strategy']]
+        if kwargs.get('beta'):
+            self.config.training.BETA_VALUES = [kwargs['beta']]
+    
+    def _run_preprocess(self, **kwargs) -> None:
         """Run data preprocessing stage."""
         from data.preprocessing import preprocess_data
         
-        try:
-            original_df, preprocessed_df, metadata = preprocess_data(
-                data_file=self.config.paths.DATA_FILE,
-                output_dir=self.config.paths.DATA_DIR,
-                categorical_cols=self.config.data.CATEGORICAL_COLS,
-                numerical_cols=self.config.data.NUMERICAL_COLS
-            )
-            
-            self.results['preprocessing'] = {
-                'metadata': metadata,
-                'original_shape': original_df.shape,
-                'preprocessed_shape': preprocessed_df.shape
-            }
-            
-            logger.info(f"📊 Preprocessed {metadata['n_samples_original']} → {metadata['n_samples_final']} samples")
-            logger.info(f"🔢 Features {metadata['n_features_original']} → {metadata['n_features_final']}")
-            
-        except Exception as e:
-            logger.error(f"Preprocessing failed: {e}")
-            raise
+        original_df, preprocessed_df, metadata = preprocess_data(
+            data_file=self.config.paths.DATA_FILE,
+            output_dir=self.config.paths.DATA_DIR,
+            categorical_cols=self.config.data.CATEGORICAL_COLS,
+            numerical_cols=self.config.data.NUMERICAL_COLS
+        )
+        
+        self.results['preprocessing'] = {
+            'metadata': metadata,
+            'original_shape': original_df.shape,
+            'preprocessed_shape': preprocessed_df.shape
+        }
+        
+        logger.info(f"📊 Preprocessed {metadata['n_samples_original']} → {metadata['n_samples_final']} samples")
     
-    def _run_training(self) -> None:
+    def _run_train(self, **kwargs) -> None:
         """Run model training stage."""
         from models.training import ModelTrainer
         
-        try:
-            trainer = ModelTrainer(self.config)
-            training_results = trainer.train_all_models()
-            
-            self.results['training'] = training_results
-            
-            n_models = len(training_results)
-            logger.info(f"🧠 Trained {n_models} models successfully")
-            
-        except Exception as e:
-            logger.error(f"Training failed: {e}")
-            raise
+        trainer = ModelTrainer(self.config)
+        training_results = trainer.train_all_models()
+        self.results['training'] = training_results
+        logger.info(f"🧠 Trained {len(training_results)} models successfully")
     
-    def _run_visualization(self) -> None:
+    def _run_visualize(self, **kwargs) -> None:
         """Run latent space visualization stage."""
         from visualization.latent_viz import LatentVisualizer
         
         try:
             visualizer = LatentVisualizer(self.config)
             viz_results = visualizer.create_all_visualizations()
-            
             self.results['visualization'] = viz_results
-            
-            logger.info(f"🎨 Created visualizations for all trained models")
-            
+            logger.info("🎨 Created visualizations for all trained models")
         except Exception as e:
-            logger.error(f"Visualization failed: {e}")
-            # Don't raise - visualization is not critical
-            logger.warning("Continuing without visualizations...")
+            logger.warning(f"Visualization failed: {e}. Continuing...")
     
-    def _run_sampling(
-        self, 
-        sampling_methods: List[str], 
-        sampling_params: Dict[str, Any]
-    ) -> None:
-        """Run sampling stage."""
-        from sampling.manager import SamplingManager
+    def _run_sample(self, **kwargs) -> None:
+        """Run sampling stage with enhanced error handling and model recovery."""
+        logger.info("🎲 Starting sampling stage...")
         
+        # Enhanced import handling
+        try:
+            # Try direct import first
+            from sampling.manager import SamplingManager, create_default_sampling_manager
+            logger.info("✅ Successfully imported SamplingManager")
+            
+        except ImportError as e:
+            logger.error(f"❌ Failed to import SamplingManager: {e}")
+            
+            # Try alternative import paths
+            # Add multiple potential paths
+            potential_paths = [
+                os.path.dirname(os.path.abspath(__file__)),
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'),
+                os.getcwd()
+            ]
+            
+            for path in potential_paths:
+                if path not in sys.path:
+                    sys.path.insert(0, path)
+            
+            try:
+                from sampling.manager import SamplingManager, create_default_sampling_manager
+                logger.info("✅ Successfully imported SamplingManager with path adjustment")
+            except ImportError as e2:
+                logger.error(f"❌ All import attempts failed: {e2}")
+                logger.warning("🔄 Using enhanced fallback sampling")
+                return self._run_enhanced_sample_fallback(**kwargs)
+        
+        # Check if models exist before attempting sampling
+        missing_models = self._check_model_availability()
+        if missing_models:
+            logger.warning(f"⚠️ Some models missing: {missing_models}")
+            logger.info("🔄 Attempting to recover missing models...")
+            
+            # Try to recover missing models
+            recovered = self._attempt_model_recovery(missing_models)
+            if recovered:
+                logger.info(f"✅ Recovered {recovered} models")
+            
+            # Re-check after recovery
+            still_missing = self._check_model_availability()
+            if still_missing:
+                logger.error(f"❌ Could not recover models: {still_missing}")
+                logger.info("💡 Try running training first: python main.py --stages train")
+                # Continue with available models instead of failing completely
+        
+        # Create and configure sampling manager
         try:
             manager = SamplingManager(self.config)
-            
-            # Register desired sampling methods
-            for method in sampling_methods:
-                manager.register_method(method, **sampling_params)
-            
-            # Run sampling for all trained models
-            sampling_results = manager.run_all_sampling()
-            
-            self.results['sampling'] = sampling_results
-            
-            n_methods = len(sampling_methods)
-            n_configs = len(self.config.training.ANNEALING_STRATEGIES) * len(self.config.training.BETA_VALUES)
-            n_sizes = len(self.config.training.SAMPLE_SIZES)
-            total_runs = n_methods * n_configs * n_sizes
-            
-            logger.info(f"🎲 Completed {total_runs} sampling runs")
-            logger.info(f"📊 Methods: {sampling_methods}")
+            logger.info("✅ SamplingManager created successfully")
             
         except Exception as e:
-            logger.error(f"Sampling failed: {e}")
-            raise
+            logger.error(f"❌ Failed to create SamplingManager: {e}")
+            return self._run_enhanced_sample_fallback(**kwargs)
+        
+        # Register sampling methods with error handling
+        methods = kwargs.get('sampling_methods', self.config.sampling.DEFAULT_METHODS)
+        params = kwargs.get('sampling_params', self.config.get_sampling_params())
+        
+        # Handle 'all' methods selection
+        if 'all' in methods:
+            methods = ['equiprobable', 'distance_based', 'cluster_based', 'hybrid']
+        
+        successfully_registered = []
+        for method in methods:
+            try:
+                manager.register_method(method, **params)
+                successfully_registered.append(method)
+                logger.info(f"✅ Registered method: {method}")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to register {method}: {e}")
+        
+        if not successfully_registered:
+            logger.error("❌ No sampling methods could be registered")
+            return self._run_enhanced_sample_fallback(**kwargs)
+        
+        logger.info(f"📋 Successfully registered {len(successfully_registered)} methods: {successfully_registered}")
+        
+        # Run sampling with automatic recovery
+        try:
+            sampling_results = manager.run_all_sampling()
+            self.results['sampling'] = sampling_results
+            
+            # Count successful runs
+            successful_runs = 0
+            total_runs = 0
+            for strategy_results in sampling_results.values():
+                for beta_results in strategy_results.values():
+                    total_runs += 1
+                    if 'error' not in beta_results:
+                        successful_runs += len(beta_results)
+            
+            logger.info(f"🎲 Sampling completed: {successful_runs} successful runs out of {total_runs} total configurations")
+            
+            if successful_runs == 0:
+                logger.warning("⚠️ No sampling runs succeeded - check model availability and configuration")
+            
+        except Exception as e:
+            logger.error(f"❌ Sampling execution failed: {e}")
+            self.results['sampling'] = {'error': str(e)}
     
-    def _run_testing(self) -> None:
+    def _check_model_availability(self) -> List[str]:
+        """Check which models are missing and return list of missing model identifiers."""
+        missing_models = []
+        
+        for strategy in self.config.training.ANNEALING_STRATEGIES:
+            for beta in self.config.training.BETA_VALUES:
+                model_dir = os.path.join(self.config.paths.MODELS_DIR, strategy, f'beta_{beta}')
+                model_path = os.path.join(model_dir, 'vae_model_final.pth')
+                
+                if not os.path.exists(model_path):
+                    # Check for alternative model files
+                    alternative_files = [
+                        os.path.join(model_dir, 'vae_model.pth'),
+                        os.path.join(model_dir, 'model.pth')
+                    ]
+                    
+                    # Check for checkpoint files
+                    checkpoint_files = glob.glob(os.path.join(model_dir, "checkpoint_epoch_*.pth"))
+                    
+                    if not any(os.path.exists(f) for f in alternative_files) and not checkpoint_files:
+                        missing_models.append(f"{strategy}-{beta}")
+                    else:
+                        logger.info(f"🔍 Found alternative model files for {strategy}-{beta}")
+        
+        return missing_models
+    
+    def _attempt_model_recovery(self, missing_models: List[str]) -> int:
+        """Attempt to recover missing models from checkpoints."""
+        recovered_count = 0
+        
+        for model_id in missing_models:
+            try:
+                strategy, beta_str = model_id.split('-')
+                beta = float(beta_str)
+                
+                model_dir = os.path.join(self.config.paths.MODELS_DIR, strategy, f'beta_{beta}')
+                
+                # Try to recover from checkpoints
+                if os.path.exists(model_dir):
+                    checkpoint_files = glob.glob(os.path.join(model_dir, "checkpoint_epoch_*.pth"))
+                    
+                    if checkpoint_files:
+                        # Find the best checkpoint
+                        best_checkpoint = self._find_best_checkpoint(checkpoint_files)
+                        if best_checkpoint:
+                            final_path = os.path.join(model_dir, 'vae_model_final.pth')
+                            shutil.copy2(best_checkpoint, final_path)
+                            
+                            if os.path.exists(final_path):
+                                logger.info(f"✅ Recovered model for {model_id}")
+                                recovered_count += 1
+                            
+            except Exception as e:
+                logger.warning(f"⚠️ Could not recover {model_id}: {e}")
+        
+        return recovered_count
+    
+    def _find_best_checkpoint(self, checkpoint_files: List[str]) -> str:
+        """Find the best checkpoint based on validation loss."""
+        
+        best_checkpoint = None
+        best_loss = float('inf')
+        
+        for checkpoint_file in checkpoint_files:
+            try:
+                # Extract validation loss from filename
+                filename = os.path.basename(checkpoint_file)
+                match = re.search(r'val_loss_(\d+\.?\d*)', filename)
+                
+                if match:
+                    val_loss = float(match.group(1))
+                    if val_loss < best_loss:
+                        best_loss = val_loss
+                        best_checkpoint = checkpoint_file
+                else:
+                    # If no loss in filename, use the most recent file
+                    if best_checkpoint is None:
+                        best_checkpoint = checkpoint_file
+                        
+            except Exception as e:
+                logger.warning(f"Could not parse checkpoint {checkpoint_file}: {e}")
+        
+        return best_checkpoint
+    
+    def _run_enhanced_sample_fallback(self, **kwargs) -> None:
+        """Enhanced fallback sampling with better diagnostics and recovery."""
+        logger.warning("🔄 Using enhanced fallback sampling mode")
+        
+        # Enhanced diagnostics
+        missing_models = self._check_model_availability()
+        
+        if missing_models:
+            logger.error(f"❌ Missing final models for: {', '.join(missing_models)}")
+            
+            # Check for partial models
+            partial_models = []
+            for model_id in missing_models:
+                strategy, beta_str = model_id.split('-')
+                beta = float(beta_str)
+                model_dir = os.path.join(self.config.paths.MODELS_DIR, strategy, f'beta_{beta}')
+                
+                if os.path.exists(model_dir):
+                    checkpoint_files = glob.glob(os.path.join(model_dir, "checkpoint_*.pth"))
+                    if checkpoint_files:
+                        partial_models.append(model_id)
+            
+            if partial_models:
+                logger.info(f"🔍 Found checkpoints for: {', '.join(partial_models)}")
+                logger.info("💡 These can potentially be recovered. Try:")
+                logger.info("   python main.py --stages sample  # This will attempt automatic recovery")
+            
+            logger.info("💡 To generate missing models, run: python main.py --stages train")
+            
+            self.results['sampling'] = {
+                'error': f'Missing models: {missing_models}',
+                'recoverable': partial_models,
+                'total_missing': len(missing_models)
+            }
+        else:
+            logger.info("✅ All models found, but sampling functionality limited in fallback mode")
+            logger.info("💡 Try restarting or check import paths for full functionality")
+            
+            self.results['sampling'] = {
+                'status': 'Models found but sampling not implemented in fallback',
+                'available_models': len(self.config.training.ANNEALING_STRATEGIES) * len(self.config.training.BETA_VALUES)
+            }
+    
+    def _run_test(self, **kwargs) -> None:
         """Run distribution testing stage."""
         from evaluation.testing import DistributionTester
         
         try:
             tester = DistributionTester(self.config)
             test_results = tester.run_all_tests()
-            
             self.results['testing'] = test_results
-            
-            logger.info(f"🧪 Completed distribution testing")
-            
+            logger.info("🧪 Completed distribution testing")
         except Exception as e:
-            logger.error(f"Testing failed: {e}")
-            # Don't raise - testing is not critical for the main pipeline
-            logger.warning("Continuing without distribution tests...")
+            logger.warning(f"Testing failed: {e}. Continuing...")
 
 def main():
-    """Main entry point with argument parsing."""
-    parser = argparse.ArgumentParser(
-        description='Clean VAE Pipeline with Multi-Method Sampling',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py                                    # Run full pipeline with defaults
-  python main.py --stages preprocess train         # Run only preprocessing and training
-  python main.py --methods cluster_based           # Use only cluster-based sampling
-  python main.py --methods all                     # Use all sampling methods
-  python main.py --strategy linear --beta 1.0      # Specific strategy and beta
-  python main.py --fast                           # Fast mode for testing
-        """
-    )
+    """Main entry point with simplified argument parsing."""
+    parser = argparse.ArgumentParser(description='Clean VAE Pipeline')
     
-    # Stage selection
-    parser.add_argument(
-        '--stages', nargs='+',
-        choices=['preprocess', 'train', 'visualize', 'sample', 'test'],
-        help='Stages to run (default: all)'
-    )
-    
-    # Model configuration
-    parser.add_argument(
-        '--strategy', type=str,
-        choices=['linear', 'exponential', 'constant', 'cyclical'],
-        help='Specific annealing strategy'
-    )
-    
-    parser.add_argument(
-        '--beta', type=float,
-        help='Specific beta value'
-    )
-    
-    # Sampling configuration
-    
-    # REPLACE WITH THIS NEW CODE:
-    parser.add_argument(
-        '--methods',
-        nargs='+',
-        choices=[
-            # Basic methods
-            'equiprobable', 'distance_based', 'cluster_based', 'hybrid',
-            # Density-aware methods  
-            'density_aware_kde', 'density_aware_importance', 
-            'progressive_wasserstein', 'blue_noise',
-            # Optimal transport methods
-            'optimal_transport_greedy', 'optimal_transport_hungarian',
-            'sliced_wasserstein',
-            # Specialized methods
-            'cluster_one_per',
-            # Run all methods
-            'all'
-        ],
-        default=['equiprobable'],
-        help='Sampling methods to use'
-    )
+    # Core options
+    parser.add_argument('--stages', nargs='+', 
+                       choices=['preprocess', 'train', 'visualize', 'sample', 'test'],
+                       help='Stages to run (default: all)')
+    parser.add_argument('--strategy', choices=['linear', 'exponential', 'constant', 'cyclical'])
+    parser.add_argument('--beta', type=float)
+    parser.add_argument('--methods', nargs='+', 
+                       choices=['equiprobable', 'distance_based', 'cluster_based', 'hybrid',
+                               'density_aware_kde', 'optimal_transport_greedy', 'all'],
+                       default=['equiprobable'])
     
     # Sampling parameters
-    parser.add_argument(
-        '--info-weight', type=float, default=1.0,
-        help='Information gain weight'
-    )
-    
-    parser.add_argument(
-        '--redundancy-weight', type=float, default=1.0,
-        help='Redundancy penalty weight'
-    )
-    
-    parser.add_argument(
-        '--coverage-radius', type=float, default=0.2,
-        help='Coverage radius for distance-based methods'
-    )
-    
-    parser.add_argument(
-        '--cluster-method', type=str, default='kmeans',
-        choices=['kmeans', 'dbscan'],
-        help='Clustering method'
-    )
-    
-    parser.add_argument(
-        '--cluster-sizing', type=str, default='adaptive',
-        choices=['adaptive', 'sqrt_rule', 'proportional', 'fixed'],
-        help='Cluster sizing method'
-    )
+    parser.add_argument('--info-weight', type=float, default=1.0)
+    parser.add_argument('--redundancy-weight', type=float, default=1.0)
+    parser.add_argument('--coverage-radius', type=float, default=0.2)
     
     # General options
-    parser.add_argument(
-        '--fast', action='store_true',
-        help='Fast mode (reduced epochs and samples for testing)'
-    )
-    
-    parser.add_argument(
-        '--verbose', action='store_true',
-        help='Enable verbose logging'
-    )
-    
-    parser.add_argument(
-        '--config', type=str,
-        help='Path to configuration file'
-    )
+    parser.add_argument('--fast', action='store_true', help='Fast mode for testing')
+    parser.add_argument('--verbose', action='store_true')
     
     args = parser.parse_args()
     
-    # Set logging level
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Fast mode adjustments
     if args.fast:
         os.environ['VAE_FAST_MODE'] = '1'
         logger.info("⚡ Fast mode enabled")
     
-    # Handle 'all' methods selection
     if 'all' in args.methods:
         args.methods = ['equiprobable', 'distance_based', 'cluster_based', 'hybrid']
     
-    # Prepare sampling parameters
+    # Prepare parameters
     sampling_params = {
         'info_weight': args.info_weight,
         'redundancy_weight': args.redundancy_weight,
         'coverage_radius': args.coverage_radius,
-        'cluster_method': args.cluster_method,
-        'cluster_sizing_method': args.cluster_sizing,
     }
     
-    # Log configuration
-    logger.info("🎯 VAE Pipeline Configuration:")
-    logger.info(f"  Stages: {args.stages or 'all'}")
-    logger.info(f"  Sampling methods: {args.methods}")
-    if args.strategy:
-        logger.info(f"  Strategy: {args.strategy}")
-    if args.beta:
-        logger.info(f"  Beta: {args.beta}")
-    logger.info(f"  Fast mode: {args.fast}")
-    
     try:
-        # Initialize and run pipeline
-        pipeline = VAEPipeline(args.config)
+        pipeline = VAEPipeline()
         results = pipeline.run(
             stages=args.stages,
             strategy=args.strategy,
@@ -393,13 +426,7 @@ Examples:
             sampling_params=sampling_params
         )
         
-        # Print summary
-        logger.info("\n📊 Execution Summary:")
-        for stage, exec_time in results['execution_times'].items():
-            if stage != 'total':
-                logger.info(f"  {stage}: {timedelta(seconds=int(exec_time))}")
-        
-        logger.info(f"\n🎯 Pipeline completed successfully!")
+        logger.info("🎯 Pipeline completed successfully!")
         logger.info(f"📁 Results available in: {pipeline.config.paths.OUTPUT_DIR}")
         
     except KeyboardInterrupt:
