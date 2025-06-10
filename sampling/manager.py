@@ -1,5 +1,5 @@
 """
-Fixed sampling methods manager with automatic model recovery.
+Updated sampling methods manager with only cluster-based, equiprobable (Gaussian), and Latin Hypercube.
 """
 
 import os
@@ -15,15 +15,14 @@ import logging
 
 from .base import MultiMethodSampler, SamplingResult
 from .equiprobable import EquiprobableSampler
-from .representative import DistanceBasedSampler
-from .cluster_based import ClusterBasedSampler
-from .hybrid import HybridSampler
+from .cluster_based import ClusterBasedSampler  
+from .latin_hypercube import LatinHypercubeSampler, AdaptiveLatinHypercubeSampler
 
 logger = logging.getLogger(__name__)
 
 class SamplingManager:
     """
-    Manages multiple sampling methods with automatic model recovery.
+    Manages sampling methods: cluster-based, equiprobable (Gaussian), and Latin Hypercube.
     """
     
     def __init__(self, config):
@@ -31,20 +30,21 @@ class SamplingManager:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.multi_sampler = MultiMethodSampler()
         
-        # Available sampling methods (simplified list for core methods)
+        # Available sampling methods (reduced to core methods)
         self.available_methods = {
-            'equiprobable': EquiprobableSampler,
-            'distance_based': DistanceBasedSampler,
             'cluster_based': ClusterBasedSampler,
-            'hybrid': HybridSampler,
+            'equiprobable': EquiprobableSampler,
+            'latin_hypercube': LatinHypercubeSampler,
+            'adaptive_latin_hypercube': AdaptiveLatinHypercubeSampler,
         }
         
         logger.info(f"Sampling manager initialized with {len(self.available_methods)} methods")
+        logger.info(f"Available methods: {list(self.available_methods.keys())}")
     
     def register_method(self, method_name: str, **kwargs) -> None:
         """Register a sampling method."""
         if method_name not in self.available_methods:
-            raise ValueError(f"Unknown sampling method: {method_name}")
+            raise ValueError(f"Unknown sampling method: {method_name}. Available: {list(self.available_methods.keys())}")
         
         sampler_class = self.available_methods[method_name]
         sampler = sampler_class(**kwargs)
@@ -52,10 +52,59 @@ class SamplingManager:
         
         logger.info(f"Registered {method_name} sampling method")
     
+    def register_default_methods(self) -> None:
+        """Register all default sampling methods with standard parameters."""
+        # Default parameters
+        default_params = {
+            'cluster_based': {
+                'cluster_method': 'kmeans',
+                'cluster_sizing_method': 'adaptive',
+                'within_cluster_method': 'centroid_distance',
+                'min_clusters': 5,
+                'max_clusters': 500,
+                'info_weight': 1.0,
+                'redundancy_weight': 1.0
+            },
+            'equiprobable': {},  # No special parameters needed
+            'latin_hypercube': {
+                'criterion': 'maximin',
+                'iterations': 10,
+                'random_state': 42
+            },
+            'adaptive_latin_hypercube': {
+                'criterion': 'maximin',
+                'iterations': 10,
+                'density_weight': 0.3,
+                'adaptive_iterations': 20,
+                'random_state': 42
+            }
+        }
+        
+        for method_name, params in default_params.items():
+            try:
+                self.register_method(method_name, **params)
+                logger.info(f"✅ Registered default {method_name} method")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to register {method_name}: {e}")
+    
     def run_sampling_for_model(self, strategy: str, beta: float, 
                               methods: Optional[List[str]] = None) -> Dict[str, Dict[int, SamplingResult]]:
         """Run sampling for a specific trained model with automatic recovery."""
         logger.info(f"Running sampling for {strategy} strategy, beta={beta}")
+        
+        # Use default methods if none specified
+        if methods is None:
+            methods = list(self.available_methods.keys())
+        
+        # Validate methods
+        invalid_methods = [m for m in methods if m not in self.available_methods]
+        if invalid_methods:
+            logger.warning(f"Invalid methods will be skipped: {invalid_methods}")
+            methods = [m for m in methods if m in self.available_methods]
+        
+        if not methods:
+            logger.error("No valid methods specified")
+            return {'error': 'No valid methods specified'}
         
         try:
             # Load model and get latent encodings
@@ -133,30 +182,7 @@ class SamplingManager:
                 logger.info("✅ Successfully recovered final model from checkpoint")
             except Exception as e:
                 logger.error(f"Model recovery failed for {strategy}-{beta}: {e}")
-                
-                # Last resort: look for any available model
-                alternative_paths = [
-                    os.path.join(model_dir, 'vae_model.pth'),
-                    os.path.join(model_dir, 'model.pth'),
-                    os.path.join(model_dir, 'checkpoint.pth')
-                ]
-                
-                # Also check for checkpoint files
-                checkpoint_files = glob.glob(os.path.join(model_dir, "checkpoint_epoch_*.pth"))
-                if checkpoint_files:
-                    # Use the most recent checkpoint
-                    latest_checkpoint = max(checkpoint_files, key=os.path.getmtime)
-                    alternative_paths.insert(0, latest_checkpoint)
-                
-                model_path = None
-                for alt_path in alternative_paths:
-                    if os.path.exists(alt_path):
-                        logger.info(f"🔄 Using alternative model: {alt_path}")
-                        model_path = alt_path
-                        break
-                
-                if model_path is None:
-                    raise FileNotFoundError(f"No model files found for {strategy}-{beta} in {model_dir}")
+                raise Exception(f"Model loading failed for {strategy}-{beta}: {e}")
         
         # Load and validate the model
         try:
@@ -412,32 +438,66 @@ class SamplingManager:
                 methods_used = df[df['success'] == True]['method'].unique()
                 logger.info(f"  📋 Methods used: {', '.join(methods_used)}")
 
+
 def create_default_sampling_manager(config) -> SamplingManager:
     """Create a sampling manager with default methods registered."""
     manager = SamplingManager(config)
     
-    # Register default methods with parameters from config
-    try:
-        sampling_params = config.get_sampling_params()
-    except AttributeError:
-        # Fallback if method doesn't exist
-        sampling_params = {
+    # Register all default methods
+    manager.register_default_methods()
+    
+    return manager
+
+
+def create_sampling_manager_with_methods(config, methods: List[str]) -> SamplingManager:
+    """
+    Create a sampling manager with specific methods registered.
+    
+    Args:
+        config: Configuration object
+        methods: List of method names to register
+        
+    Returns:
+        Configured SamplingManager
+    """
+    manager = SamplingManager(config)
+    
+    # Get default parameters
+    default_params = {
+        'cluster_based': {
+            'cluster_method': 'kmeans',
+            'cluster_sizing_method': 'adaptive',
+            'within_cluster_method': 'centroid_distance',
+            'min_clusters': 5,
+            'max_clusters': 500,
             'info_weight': 1.0,
-            'redundancy_weight': 1.0,
-            'coverage_radius': 0.2,
-            'candidate_fraction': 1.0
+            'redundancy_weight': 1.0
+        },
+        'equiprobable': {},
+        'latin_hypercube': {
+            'criterion': 'maximin',
+            'iterations': 10,
+            'random_state': 42
+        },
+        'adaptive_latin_hypercube': {
+            'criterion': 'maximin',
+            'iterations': 10,
+            'density_weight': 0.3,
+            'adaptive_iterations': 20,
+            'random_state': 42
         }
+    }
     
-    # Get default methods from config or use fallback
-    try:
-        default_methods = config.sampling.DEFAULT_METHODS
-    except AttributeError:
-        default_methods = ['equiprobable', 'distance_based', 'cluster_based', 'hybrid']
-    
-    for method in default_methods:
-        try:
-            manager.register_method(method, **sampling_params)
-        except Exception as e:
-            logger.warning(f"Failed to register {method}: {e}")
+    # Register only specified methods
+    for method in methods:
+        if method in manager.available_methods:
+            params = default_params.get(method, {})
+            try:
+                manager.register_method(method, **params)
+                logger.info(f"✅ Registered {method} method")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to register {method}: {e}")
+        else:
+            logger.warning(f"⚠️ Unknown method: {method}")
     
     return manager

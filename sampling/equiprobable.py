@@ -1,11 +1,12 @@
 """
-Equiprobable grid sampling implementation.
+Equiprobable grid sampling implementation with Gaussian quantiles.
 """
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import math
+from scipy.stats import norm
 from typing import Dict, List, Tuple, Optional, Any
 import logging
 
@@ -15,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 class EquiprobableSampler(BaseSampler):
     """
-    Equiprobable grid sampling method.
+    Equiprobable grid sampling method using Gaussian quantiles.
     
-    Divides the latent space into equiprobable regions and selects
-    one representative from each region.
+    Divides the latent space into equiprobable regions based on Gaussian
+    distribution quantiles rather than empirical quantiles.
     """
     
     def __init__(self, **kwargs):
@@ -33,7 +34,7 @@ class EquiprobableSampler(BaseSampler):
         **kwargs
     ) -> SamplingResult:
         """
-        Sample points using equiprobable grid approach.
+        Sample points using equiprobable grid approach with Gaussian quantiles.
         
         Args:
             z_latent: Latent space coordinates
@@ -43,7 +44,7 @@ class EquiprobableSampler(BaseSampler):
         Returns:
             SamplingResult with selected representatives
         """
-        logger.info(f"Starting equiprobable grid sampling for {sample_size} samples")
+        logger.info(f"Starting equiprobable grid sampling (Gaussian quantiles) for {sample_size} samples")
         
         # Calculate grid dimensions
         n_rows, n_cols = self._calculate_grid_dimensions(sample_size)
@@ -51,8 +52,8 @@ class EquiprobableSampler(BaseSampler):
         
         logger.info(f"Using {n_rows}x{n_cols} grid ({total_cells} cells)")
         
-        # Create equiprobable grid
-        grid_assignments, grid_info = self._create_equiprobable_grid(
+        # Create equiprobable grid using Gaussian quantiles
+        grid_assignments, grid_info = self._create_gaussian_equiprobable_grid(
             z_latent, n_rows, n_cols
         )
         
@@ -70,7 +71,9 @@ class EquiprobableSampler(BaseSampler):
             'total_cells': total_cells,
             'empty_cells': grid_info['empty_cells'],
             'grid_assignments': grid_assignments.tolist(),
-            'samples_per_cell': grid_info['samples_per_cell']
+            'samples_per_cell': grid_info['samples_per_cell'],
+            'quantile_method': 'gaussian',
+            'gaussian_parameters': grid_info['gaussian_parameters']
         }
         
         logger.info(f"Equiprobable grid sampling completed: {len(selected_indices)} representatives")
@@ -108,14 +111,14 @@ class EquiprobableSampler(BaseSampler):
         
         return best_rows, best_cols
     
-    def _create_equiprobable_grid(
+    def _create_gaussian_equiprobable_grid(
         self, 
         z_latent: np.ndarray, 
         n_rows: int, 
         n_cols: int
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        Create equiprobable grid assignments.
+        Create equiprobable grid assignments using Gaussian quantiles.
         
         Args:
             z_latent: Latent coordinates
@@ -125,9 +128,32 @@ class EquiprobableSampler(BaseSampler):
         Returns:
             Tuple of (grid_assignments, grid_info)
         """
-        # Compute quantiles for each dimension
-        x_quantiles = np.quantile(z_latent[:, 0], np.linspace(0, 1, n_cols + 1))
-        y_quantiles = np.quantile(z_latent[:, 1], np.linspace(0, 1, n_rows + 1))
+        # Fit Gaussian parameters to each dimension
+        dim1_mean = np.mean(z_latent[:, 0])
+        dim1_std = np.std(z_latent[:, 0])
+        dim2_mean = np.mean(z_latent[:, 1])
+        dim2_std = np.std(z_latent[:, 1])
+        
+        logger.info(f"Gaussian parameters - Dim1: μ={dim1_mean:.3f}, σ={dim1_std:.3f}")
+        logger.info(f"Gaussian parameters - Dim2: μ={dim2_mean:.3f}, σ={dim2_std:.3f}")
+        
+        # Compute Gaussian quantiles for each dimension
+        x_quantiles = norm.ppf(np.linspace(0, 1, n_cols + 1)[1:-1], 
+                              loc=dim1_mean, scale=dim1_std)
+        y_quantiles = norm.ppf(np.linspace(0, 1, n_rows + 1)[1:-1], 
+                              loc=dim2_mean, scale=dim2_std)
+        
+        # Add extreme values to ensure all points are covered
+        x_quantiles = np.concatenate([
+            [z_latent[:, 0].min() - 1], 
+            x_quantiles, 
+            [z_latent[:, 0].max() + 1]
+        ])
+        y_quantiles = np.concatenate([
+            [z_latent[:, 1].min() - 1], 
+            y_quantiles, 
+            [z_latent[:, 1].max() + 1]
+        ])
         
         # Assign each point to a grid cell
         grid_assignments = np.zeros(len(z_latent), dtype=int)
@@ -164,11 +190,17 @@ class EquiprobableSampler(BaseSampler):
             'samples_per_cell': samples_per_cell,
             'empty_cells': empty_cells,
             'n_rows': n_rows,
-            'n_cols': n_cols
+            'n_cols': n_cols,
+            'gaussian_parameters': {
+                'dim1_mean': dim1_mean,
+                'dim1_std': dim1_std,
+                'dim2_mean': dim2_mean,
+                'dim2_std': dim2_std
+            }
         }
         
         if empty_cells:
-            logger.warning(f"Found {len(empty_cells)} empty grid cells")
+            logger.warning(f"Found {len(empty_cells)} empty grid cells with Gaussian quantiles")
         
         return grid_assignments, grid_info
     
@@ -220,11 +252,11 @@ class EquiprobableSampler(BaseSampler):
         super().create_visualization(result, output_dir, title_suffix, **plot_kwargs)
         
         # Create equiprobable-specific plots
-        self._create_grid_visualization(result, output_dir)
+        self._create_gaussian_grid_visualization(result, output_dir)
         self._create_cell_count_heatmap(result, output_dir)
     
-    def _create_grid_visualization(self, result: SamplingResult, output_dir: str) -> None:
-        """Create grid visualization with quantile lines."""
+    def _create_gaussian_grid_visualization(self, result: SamplingResult, output_dir: str) -> None:
+        """Create grid visualization with Gaussian quantile lines."""
         try:
             grid_info = result.method_info
             z_latent = result.latent_coordinates
@@ -254,18 +286,30 @@ class EquiprobableSampler(BaseSampler):
                 for q in y_quantiles:
                     plt.axhline(q, color='gray', linestyle='--', alpha=0.5)
             
+            # Add Gaussian parameter info
+            if 'gaussian_parameters' in grid_info:
+                params = grid_info['gaussian_parameters']
+                param_text = (f"Gaussian Fit:\n"
+                            f"Dim1: μ={params['dim1_mean']:.3f}, σ={params['dim1_std']:.3f}\n"
+                            f"Dim2: μ={params['dim2_mean']:.3f}, σ={params['dim2_std']:.3f}")
+                
+                plt.text(0.02, 0.02, param_text,
+                        transform=plt.gca().transAxes, 
+                        verticalalignment='bottom',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            
             n_rows, n_cols = grid_info['grid_dimensions']
-            plt.title(f'Equiprobable Grid Sampling\n'
+            plt.title(f'Equiprobable Grid Sampling (Gaussian Quantiles)\n'
                      f'Grid: {n_rows}x{n_cols}, Samples: {len(selected_indices)}')
             plt.xlabel('Latent Dimension 1')
             plt.ylabel('Latent Dimension 2')
             plt.legend()
             plt.grid(alpha=0.3)
-            plt.savefig(os.path.join(output_dir, 'equiprobable_grid.png'), dpi=300)
+            plt.savefig(os.path.join(output_dir, 'equiprobable_gaussian_grid.png'), dpi=300)
             plt.close()
             
         except Exception as e:
-            logger.warning(f"Could not create grid visualization: {e}")
+            logger.warning(f"Could not create Gaussian grid visualization: {e}")
     
     def _create_cell_count_heatmap(self, result: SamplingResult, output_dir: str) -> None:
         """Create heatmap showing distribution of points in grid cells."""
@@ -294,13 +338,13 @@ class EquiprobableSampler(BaseSampler):
                             color=color, fontsize=max(6, 12 - n_rows // 3)
                         )
             
-            plt.title(f'Distribution of Points in Grid Cells\n'
+            plt.title(f'Distribution of Points in Gaussian Grid Cells\n'
                      f'Grid: {n_rows}x{n_cols}')
             plt.xlabel(f'Latent Dimension 1 (bins, {n_cols} total)')
             plt.ylabel(f'Latent Dimension 2 (bins, {n_rows} total)')
             
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, 'grid_cell_counts.png'), dpi=300)
+            plt.savefig(os.path.join(output_dir, 'gaussian_grid_cell_counts.png'), dpi=300)
             plt.close()
             
         except Exception as e:

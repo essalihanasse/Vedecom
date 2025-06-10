@@ -1,5 +1,5 @@
 """
-Main orchestrator for the clean VAE pipeline - OPTIMIZED VERSION
+Updated main orchestrator for VAE pipeline with multiple latent dimensions support.
 """
 
 import os
@@ -20,8 +20,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class VAEPipeline:
-    """Main VAE pipeline orchestrator."""
+class EnhancedVAEPipeline:
+    """Enhanced VAE pipeline with multiple latent dimensions support."""
     
     def __init__(self, config_path: Optional[str] = None):
         try:
@@ -35,9 +35,10 @@ class VAEPipeline:
         self.execution_times = {}
     
     def run(self, stages: Optional[List[str]] = None, **kwargs) -> Dict[str, Any]:
-        """Run the complete VAE pipeline."""
+        """Run the enhanced VAE pipeline with latent dimension support."""
         start_time = time.time()
-        logger.info("🚀 Starting clean VAE pipeline...")
+        logger.info("🚀 Starting enhanced VAE pipeline with multiple latent dimensions...")
+        logger.info(f"📏 Latent dimensions to explore: {self.config.model.LATENT_DIMS}")
         
         stages = stages or ['preprocess', 'train', 'visualize', 'sample', 'test']
         
@@ -46,9 +47,9 @@ class VAEPipeline:
         
         # Run stages
         for stage in stages:
-            logger.info(f"\n{'='*60}")
+            logger.info(f"\n{'='*70}")
             logger.info(f"🔄 Running stage: {stage.upper()}")
-            logger.info(f"{'='*60}")
+            logger.info(f"{'='*70}")
             
             stage_start = time.time()
             
@@ -72,13 +73,15 @@ class VAEPipeline:
         self.execution_times['total'] = total_time
         
         logger.info(f"\n{'='*80}")
-        logger.info("🎉 Pipeline completed successfully!")
+        logger.info("🎉 Enhanced pipeline completed successfully!")
         logger.info(f"⏱️ Total execution time: {timedelta(seconds=int(total_time))}")
+        logger.info(f"📏 Latent dimensions explored: {len(self.config.model.LATENT_DIMS)}")
         
         return {
             'stages_completed': stages,
             'execution_times': self.execution_times,
-            'results': self.results
+            'results': self.results,
+            'latent_dims_explored': self.config.model.LATENT_DIMS
         }
     
     def _update_config(self, kwargs: Dict[str, Any]) -> None:
@@ -87,10 +90,19 @@ class VAEPipeline:
             self.config.training.ANNEALING_STRATEGIES = [kwargs['strategy']]
         if kwargs.get('beta'):
             self.config.training.BETA_VALUES = [kwargs['beta']]
+        if kwargs.get('latent_dims'):
+            self.config.model.LATENT_DIMS = kwargs['latent_dims']
+        
+        # Log configuration
+        logger.info(f"📋 Strategies: {self.config.training.ANNEALING_STRATEGIES}")
+        logger.info(f"📊 Beta values: {self.config.training.BETA_VALUES}")
+        logger.info(f"📏 Latent dimensions: {self.config.model.LATENT_DIMS}")
     
     def _run_preprocess(self, **kwargs) -> None:
         """Run data preprocessing stage."""
         from data.preprocessing import preprocess_data
+        
+        logger.info("📊 Preprocessing data for multiple latent dimension experiments...")
         
         original_df, preprocessed_df, metadata = preprocess_data(
             data_file=self.config.paths.DATA_FILE,
@@ -102,292 +114,188 @@ class VAEPipeline:
         self.results['preprocessing'] = {
             'metadata': metadata,
             'original_shape': original_df.shape,
-            'preprocessed_shape': preprocessed_df.shape
+            'preprocessed_shape': preprocessed_df.shape,
+            'input_dim': preprocessed_df.shape[1]
         }
         
         logger.info(f"📊 Preprocessed {metadata['n_samples_original']} → {metadata['n_samples_final']} samples")
+        logger.info(f"📐 Input dimension: {preprocessed_df.shape[1]} features")
     
     def _run_train(self, **kwargs) -> None:
-        """Run model training stage."""
-        from models.training import ModelTrainer
+        """Run enhanced model training with multiple latent dimensions."""
+        from models.training import create_enhanced_trainer
         
-        trainer = ModelTrainer(self.config)
-        training_results = trainer.train_all_models()
+        logger.info("🧠 Starting enhanced training across multiple latent dimensions...")
+        
+        trainer = create_enhanced_trainer(self.config)
+        training_results = trainer.train_all_models_with_latent_dims()
+        
         self.results['training'] = training_results
-        logger.info(f"🧠 Trained {len(training_results)} models successfully")
+        
+        # Count successful trainings
+        total_models = 0
+        successful_models = 0
+        
+        for latent_dim, latent_results in training_results.items():
+            for strategy, strategy_results in latent_results.items():
+                for beta, results in strategy_results.items():
+                    total_models += 1
+                    if 'error' not in results:
+                        successful_models += 1
+        
+        logger.info(f"🧠 Training completed: {successful_models}/{total_models} models successful")
+        logger.info(f"📏 Latent dimensions trained: {list(training_results.keys())}")
     
     def _run_visualize(self, **kwargs) -> None:
-        """Run latent space visualization stage."""
-        from visualization.latent_viz import LatentVisualizer
+        """Run enhanced latent space visualization for multiple dimensions."""
+        from visualization.latent_viz import create_enhanced_visualizer
         
         try:
-            visualizer = LatentVisualizer(self.config)
-            viz_results = visualizer.create_all_visualizations()
+            logger.info("🎨 Creating visualizations for all latent dimensions...")
+            
+            visualizer = create_enhanced_visualizer(self.config)
+            viz_results = visualizer.create_all_visualizations_with_latent_dims()
             self.results['visualization'] = viz_results
-            logger.info("🎨 Created visualizations for all trained models")
+            
+            # Count visualizations created
+            total_viz = sum(len(latent_viz) for latent_viz in viz_results.values())
+            logger.info(f"🎨 Created {total_viz} visualization sets across {len(viz_results)} latent dimensions")
+            
         except Exception as e:
             logger.warning(f"Visualization failed: {e}. Continuing...")
+            # Create fallback visualizations for available models
+            self._create_fallback_visualizations()
     
     def _run_sample(self, **kwargs) -> None:
-        """Run sampling stage with enhanced error handling and model recovery."""
-        logger.info("🎲 Starting sampling stage...")
+        """Run sampling with latent dimension awareness."""
+        logger.info("🎲 Starting sampling across multiple latent dimensions...")
         
-        # Enhanced import handling
         try:
-            # Try direct import first
-            from sampling.manager import SamplingManager, create_default_sampling_manager
-            logger.info("✅ Successfully imported SamplingManager")
+            from sampling.manager import create_enhanced_sampling_manager
             
-        except ImportError as e:
-            logger.error(f"❌ Failed to import SamplingManager: {e}")
+            # Get sampling methods
+            sampling_methods = kwargs.get('sampling_methods', ['cluster_based', 'equiprobable', 'latin_hypercube'])
             
-            # Try alternative import paths
-            # Add multiple potential paths
-            potential_paths = [
-                os.path.dirname(os.path.abspath(__file__)),
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'),
-                os.getcwd()
-            ]
+            if 'all' in sampling_methods:
+                sampling_methods = ['cluster_based', 'equiprobable', 'latin_hypercube', 'adaptive_latin_hypercube']
             
-            for path in potential_paths:
-                if path not in sys.path:
-                    sys.path.insert(0, path)
+            manager = create_enhanced_sampling_manager(self.config)
             
-            try:
-                from sampling.manager import SamplingManager, create_default_sampling_manager
-                logger.info("✅ Successfully imported SamplingManager with path adjustment")
-            except ImportError as e2:
-                logger.error(f"❌ All import attempts failed: {e2}")
-                logger.warning("🔄 Using enhanced fallback sampling")
-                return self._run_enhanced_sample_fallback(**kwargs)
-        
-        # Check if models exist before attempting sampling
-        missing_models = self._check_model_availability()
-        if missing_models:
-            logger.warning(f"⚠️ Some models missing: {missing_models}")
-            logger.info("🔄 Attempting to recover missing models...")
+            # Register methods for each latent dimension
+            for latent_dim in self.config.model.LATENT_DIMS:
+                sampling_params = self.config.get_sampling_params(latent_dim)
+                
+                for method in sampling_methods:
+                    try:
+                        manager.register_method_for_latent_dim(method, latent_dim, **sampling_params)
+                    except Exception as e:
+                        logger.warning(f"Failed to register {method} for latent_dim {latent_dim}: {e}")
             
-            # Try to recover missing models
-            recovered = self._attempt_model_recovery(missing_models)
-            if recovered:
-                logger.info(f"✅ Recovered {recovered} models")
-            
-            # Re-check after recovery
-            still_missing = self._check_model_availability()
-            if still_missing:
-                logger.error(f"❌ Could not recover models: {still_missing}")
-                logger.info("💡 Try running training first: python main.py --stages train")
-                # Continue with available models instead of failing completely
-        
-        # Create and configure sampling manager
-        try:
-            manager = SamplingManager(self.config)
-            logger.info("✅ SamplingManager created successfully")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to create SamplingManager: {e}")
-            return self._run_enhanced_sample_fallback(**kwargs)
-        
-        # Register sampling methods with error handling
-        methods = kwargs.get('sampling_methods', self.config.sampling.DEFAULT_METHODS)
-        params = kwargs.get('sampling_params', self.config.get_sampling_params())
-        
-        # Handle 'all' methods selection
-        if 'all' in methods:
-            methods = ['equiprobable', 'distance_based', 'cluster_based', 'hybrid']
-        
-        successfully_registered = []
-        for method in methods:
-            try:
-                manager.register_method(method, **params)
-                successfully_registered.append(method)
-                logger.info(f"✅ Registered method: {method}")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to register {method}: {e}")
-        
-        if not successfully_registered:
-            logger.error("❌ No sampling methods could be registered")
-            return self._run_enhanced_sample_fallback(**kwargs)
-        
-        logger.info(f"📋 Successfully registered {len(successfully_registered)} methods: {successfully_registered}")
-        
-        # Run sampling with automatic recovery
-        try:
-            sampling_results = manager.run_all_sampling()
+            # Run sampling for all latent dimensions
+            sampling_results = manager.run_all_sampling_with_latent_dims()
             self.results['sampling'] = sampling_results
             
-            # Count successful runs
-            successful_runs = 0
+            # Count successful sampling runs
             total_runs = 0
-            for strategy_results in sampling_results.values():
-                for beta_results in strategy_results.values():
-                    total_runs += 1
-                    if 'error' not in beta_results:
-                        successful_runs += len(beta_results)
+            successful_runs = 0
             
-            logger.info(f"🎲 Sampling completed: {successful_runs} successful runs out of {total_runs} total configurations")
+            for latent_dim, latent_results in sampling_results.items():
+                for strategy, strategy_results in latent_results.items():
+                    for beta, beta_results in strategy_results.items():
+                        total_runs += 1
+                        if 'error' not in beta_results:
+                            successful_runs += len(beta_results)
             
-            if successful_runs == 0:
-                logger.warning("⚠️ No sampling runs succeeded - check model availability and configuration")
+            logger.info(f"🎲 Sampling completed: {successful_runs} successful runs across {len(sampling_results)} latent dimensions")
             
         except Exception as e:
-            logger.error(f"❌ Sampling execution failed: {e}")
+            logger.error(f"❌ Sampling failed: {e}")
             self.results['sampling'] = {'error': str(e)}
     
-    def _check_model_availability(self) -> List[str]:
-        """Check which models are missing and return list of missing model identifiers."""
-        missing_models = []
-        
-        for strategy in self.config.training.ANNEALING_STRATEGIES:
-            for beta in self.config.training.BETA_VALUES:
-                model_dir = os.path.join(self.config.paths.MODELS_DIR, strategy, f'beta_{beta}')
-                model_path = os.path.join(model_dir, 'vae_model_final.pth')
-                
-                if not os.path.exists(model_path):
-                    # Check for alternative model files
-                    alternative_files = [
-                        os.path.join(model_dir, 'vae_model.pth'),
-                        os.path.join(model_dir, 'model.pth')
-                    ]
-                    
-                    # Check for checkpoint files
-                    checkpoint_files = glob.glob(os.path.join(model_dir, "checkpoint_epoch_*.pth"))
-                    
-                    if not any(os.path.exists(f) for f in alternative_files) and not checkpoint_files:
-                        missing_models.append(f"{strategy}-{beta}")
-                    else:
-                        logger.info(f"🔍 Found alternative model files for {strategy}-{beta}")
-        
-        return missing_models
-    
-    def _attempt_model_recovery(self, missing_models: List[str]) -> int:
-        """Attempt to recover missing models from checkpoints."""
-        recovered_count = 0
-        
-        for model_id in missing_models:
-            try:
-                strategy, beta_str = model_id.split('-')
-                beta = float(beta_str)
-                
-                model_dir = os.path.join(self.config.paths.MODELS_DIR, strategy, f'beta_{beta}')
-                
-                # Try to recover from checkpoints
-                if os.path.exists(model_dir):
-                    checkpoint_files = glob.glob(os.path.join(model_dir, "checkpoint_epoch_*.pth"))
-                    
-                    if checkpoint_files:
-                        # Find the best checkpoint
-                        best_checkpoint = self._find_best_checkpoint(checkpoint_files)
-                        if best_checkpoint:
-                            final_path = os.path.join(model_dir, 'vae_model_final.pth')
-                            shutil.copy2(best_checkpoint, final_path)
-                            
-                            if os.path.exists(final_path):
-                                logger.info(f"✅ Recovered model for {model_id}")
-                                recovered_count += 1
-                            
-            except Exception as e:
-                logger.warning(f"⚠️ Could not recover {model_id}: {e}")
-        
-        return recovered_count
-    
-    def _find_best_checkpoint(self, checkpoint_files: List[str]) -> str:
-        """Find the best checkpoint based on validation loss."""
-        
-        best_checkpoint = None
-        best_loss = float('inf')
-        
-        for checkpoint_file in checkpoint_files:
-            try:
-                # Extract validation loss from filename
-                filename = os.path.basename(checkpoint_file)
-                match = re.search(r'val_loss_(\d+\.?\d*)', filename)
-                
-                if match:
-                    val_loss = float(match.group(1))
-                    if val_loss < best_loss:
-                        best_loss = val_loss
-                        best_checkpoint = checkpoint_file
-                else:
-                    # If no loss in filename, use the most recent file
-                    if best_checkpoint is None:
-                        best_checkpoint = checkpoint_file
-                        
-            except Exception as e:
-                logger.warning(f"Could not parse checkpoint {checkpoint_file}: {e}")
-        
-        return best_checkpoint
-    
-    def _run_enhanced_sample_fallback(self, **kwargs) -> None:
-        """Enhanced fallback sampling with better diagnostics and recovery."""
-        logger.warning("🔄 Using enhanced fallback sampling mode")
-        
-        # Enhanced diagnostics
-        missing_models = self._check_model_availability()
-        
-        if missing_models:
-            logger.error(f"❌ Missing final models for: {', '.join(missing_models)}")
-            
-            # Check for partial models
-            partial_models = []
-            for model_id in missing_models:
-                strategy, beta_str = model_id.split('-')
-                beta = float(beta_str)
-                model_dir = os.path.join(self.config.paths.MODELS_DIR, strategy, f'beta_{beta}')
-                
-                if os.path.exists(model_dir):
-                    checkpoint_files = glob.glob(os.path.join(model_dir, "checkpoint_*.pth"))
-                    if checkpoint_files:
-                        partial_models.append(model_id)
-            
-            if partial_models:
-                logger.info(f"🔍 Found checkpoints for: {', '.join(partial_models)}")
-                logger.info("💡 These can potentially be recovered. Try:")
-                logger.info("   python main.py --stages sample  # This will attempt automatic recovery")
-            
-            logger.info("💡 To generate missing models, run: python main.py --stages train")
-            
-            self.results['sampling'] = {
-                'error': f'Missing models: {missing_models}',
-                'recoverable': partial_models,
-                'total_missing': len(missing_models)
-            }
-        else:
-            logger.info("✅ All models found, but sampling functionality limited in fallback mode")
-            logger.info("💡 Try restarting or check import paths for full functionality")
-            
-            self.results['sampling'] = {
-                'status': 'Models found but sampling not implemented in fallback',
-                'available_models': len(self.config.training.ANNEALING_STRATEGIES) * len(self.config.training.BETA_VALUES)
-            }
-    
     def _run_test(self, **kwargs) -> None:
-        """Run simplified testing stage with Wasserstein distance ranking."""
-        from evaluation.testing import SimplifiedTester
+        """Run enhanced testing with latent dimension analysis."""
+        from evaluation.testing import create_enhanced_tester
         
         try:
-            tester = SimplifiedTester(self.config)
-            test_results = tester.run_all_tests()
+            logger.info("🧪 Starting enhanced testing across latent dimensions...")
+            
+            tester = create_enhanced_tester(self.config)
+            test_results = tester.run_all_tests_with_latent_dims()
             self.results['testing'] = test_results
             
-            # Log summary
-            if 'results' in test_results and test_results['results']:
+            # Summary of testing results
+            if 'results' in test_results:
                 total_tests = test_results.get('total_tests', 0)
-                logger.info(f"🧪 Completed simplified testing: {total_tests} method evaluations")
-                logger.info("📊 Results include:")
-                logger.info("  - Wasserstein distance rankings")
-                logger.info("  - Classifier-based representativeness scores")
-                logger.info("  - Combined overall rankings")
+                latent_dims_tested = test_results.get('latent_dims_tested', [])
+                
+                logger.info(f"🧪 Testing completed: {total_tests} method evaluations")
+                logger.info(f"📏 Latent dimensions tested: {latent_dims_tested}")
+                logger.info("📊 Enhanced results include:")
+                logger.info("  - Wasserstein distance rankings per latent dimension")
+                logger.info("  - Statistical significance testing")
+                logger.info("  - Latent dimension performance comparison")
+                logger.info("  - Bootstrap confidence intervals")
             else:
                 logger.warning("No test results generated")
                 
         except Exception as e:
             logger.error(f"Testing failed: {e}")
             self.results['testing'] = {'error': str(e)}
+    
+    def _create_fallback_visualizations(self) -> None:
+        """Create basic visualizations if enhanced version fails."""
+        logger.info("🔄 Creating fallback visualizations...")
+        
+        try:
+            from visualization.latent_viz import LatentVisualizer
+            
+            visualizer = LatentVisualizer(self.config)
+            
+            # Try to create visualizations for available models
+            available_models = self._find_available_models()
+            
+            if available_models:
+                basic_viz_results = {}
+                for latent_dim, models in available_models.items():
+                    if models:
+                        basic_viz_results[latent_dim] = len(models)
+                
+                self.results['visualization'] = {
+                    'status': 'fallback_mode',
+                    'basic_visualizations': basic_viz_results
+                }
+                
+                logger.info(f"🎨 Created fallback visualizations for {len(basic_viz_results)} latent dimensions")
+            else:
+                logger.warning("No trained models found for visualization")
+                
+        except Exception as e:
+            logger.warning(f"Fallback visualization also failed: {e}")
+    
+    def _find_available_models(self) -> Dict[int, List[str]]:
+        """Find available trained models organized by latent dimension."""
+        available_models = {}
+        
+        for latent_dim in self.config.model.LATENT_DIMS:
+            models = []
+            latent_dir = os.path.join(self.config.paths.MODELS_DIR, f'latent_{latent_dim}')
+            
+            if os.path.exists(latent_dir):
+                for strategy in self.config.training.ANNEALING_STRATEGIES:
+                    strategy_dir = os.path.join(latent_dir, strategy)
+                    if os.path.exists(strategy_dir):
+                        for beta in self.config.training.BETA_VALUES:
+                            model_file = os.path.join(strategy_dir, f'beta_{beta}', 'vae_model_final.pth')
+                            if os.path.exists(model_file):
+                                models.append(f"{strategy}-{beta}")
+            
+            available_models[latent_dim] = models
+        
+        return available_models
 
 def main():
-    """Main entry point with simplified argument parsing."""
-    parser = argparse.ArgumentParser(description='Clean VAE Pipeline')
+    """Enhanced main entry point with latent dimension support."""
+    parser = argparse.ArgumentParser(description='Enhanced VAE Pipeline with Multiple Latent Dimensions')
     
     # Core options
     parser.add_argument('--stages', nargs='+', 
@@ -395,19 +303,53 @@ def main():
                        help='Stages to run (default: all)')
     parser.add_argument('--strategy', choices=['linear', 'exponential', 'constant', 'cyclical'])
     parser.add_argument('--beta', type=float)
+    
+    # Latent dimension options
+    parser.add_argument('--latent-dims', nargs='+', type=int,
+                       help='Specific latent dimensions to use (e.g., --latent-dims 2 4 8)')
+    parser.add_argument('--latent-range', nargs=2, type=int, metavar=('MIN', 'MAX'),
+                       help='Range of latent dimensions (powers of 2, e.g., --latent-range 2 16)')
+    parser.add_argument('--single-latent-dim', type=int,
+                       help='Train only for a single latent dimension')
+    
+    # Sampling options
     parser.add_argument('--methods', nargs='+', 
-                       choices=['equiprobable', 'distance_based', 'cluster_based', 'hybrid',
-                               'density_aware_kde', 'optimal_transport_greedy', 'all'],
-                       default=['equiprobable'])
+                       choices=['cluster_based', 'equiprobable', 'latin_hypercube', 
+                               'adaptive_latin_hypercube', 'all'],
+                       default=['cluster_based', 'equiprobable', 'latin_hypercube'],
+                       help='Sampling methods to use')
     
     # Sampling parameters
     parser.add_argument('--info-weight', type=float, default=1.0)
     parser.add_argument('--redundancy-weight', type=float, default=1.0)
     parser.add_argument('--coverage-radius', type=float, default=0.2)
     
+    # Latin Hypercube specific parameters
+    parser.add_argument('--lhs-criterion', choices=['maximin', 'correlation', 'centermaximin'], 
+                       default='maximin', help='LHS optimization criterion')
+    parser.add_argument('--lhs-iterations', type=int, default=10, 
+                       help='Number of LHS optimization iterations')
+    parser.add_argument('--density-weight', type=float, default=0.3,
+                       help='Density weight for adaptive LHS')
+    
+    # Training options
+    parser.add_argument('--architecture', choices=['adaptive', 'deep', 'wide'],
+                       default='adaptive', help='Model architecture type')
+    parser.add_argument('--early-stopping', action='store_true', default=True,
+                       help='Enable early stopping')
+    parser.add_argument('--patience', type=int, help='Early stopping patience (auto-determined by latent dim if not set)')
+    
     # General options
     parser.add_argument('--fast', action='store_true', help='Fast mode for testing')
     parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--random-seed', type=int, default=42, help='Random seed for reproducibility')
+    parser.add_argument('--gpu-memory-limit', type=float, help='GPU memory limit in GB')
+    
+    # Analysis options
+    parser.add_argument('--create-comparison', action='store_true', default=True,
+                       help='Create comprehensive comparison across latent dimensions')
+    parser.add_argument('--statistical-tests', action='store_true', default=True,
+                       help='Run statistical significance tests')
     
     args = parser.parse_args()
     
@@ -418,28 +360,88 @@ def main():
         os.environ['VAE_FAST_MODE'] = '1'
         logger.info("⚡ Fast mode enabled")
     
+    # Handle latent dimension specifications
+    latent_dims = None
+    
+    if args.single_latent_dim:
+        latent_dims = [args.single_latent_dim]
+        logger.info(f"📏 Single latent dimension mode: {args.single_latent_dim}")
+    elif args.latent_dims:
+        latent_dims = sorted(args.latent_dims)
+        logger.info(f"📏 Custom latent dimensions: {latent_dims}")
+    elif args.latent_range:
+        min_dim, max_dim = args.latent_range
+        latent_dims = [2**i for i in range(int(np.log2(min_dim)), int(np.log2(max_dim)) + 1)]
+        logger.info(f"📏 Latent dimension range: {latent_dims}")
+    else:
+        logger.info("📏 Using default latent dimensions from config")
+    
     if 'all' in args.methods:
-        args.methods = ['equiprobable', 'distance_based', 'cluster_based', 'hybrid']
+        args.methods = ['cluster_based', 'equiprobable', 'latin_hypercube', 'adaptive_latin_hypercube']
+    
+    # Log configuration
+    logger.info(f"📋 Selected sampling methods: {', '.join(args.methods)}")
+    if latent_dims:
+        logger.info(f"📏 Latent dimensions to explore: {latent_dims}")
     
     # Prepare parameters
     sampling_params = {
         'info_weight': args.info_weight,
         'redundancy_weight': args.redundancy_weight,
         'coverage_radius': args.coverage_radius,
+        'lhs_criterion': args.lhs_criterion,
+        'lhs_iterations': args.lhs_iterations,
+        'density_weight': args.density_weight,
+        'random_seed': args.random_seed
     }
     
     try:
-        pipeline = VAEPipeline()
+        pipeline = EnhancedVAEPipeline()
+        
+        # Apply GPU memory limit if specified
+        if args.gpu_memory_limit:
+            try:
+                import torch
+                torch.cuda.set_per_process_memory_fraction(args.gpu_memory_limit / torch.cuda.get_device_properties(0).total_memory * 1e9)
+                logger.info(f"🔧 GPU memory limit set to {args.gpu_memory_limit}GB")
+            except Exception as e:
+                logger.warning(f"Could not set GPU memory limit: {e}")
+        
         results = pipeline.run(
             stages=args.stages,
             strategy=args.strategy,
             beta=args.beta,
+            latent_dims=latent_dims,
             sampling_methods=args.methods,
-            sampling_params=sampling_params
+            sampling_params=sampling_params,
+            architecture=args.architecture,
+            patience=args.patience,
+            create_comparison=args.create_comparison,
+            statistical_tests=args.statistical_tests
         )
         
-        logger.info("🎯 Pipeline completed successfully!")
+        logger.info("🎯 Enhanced pipeline completed successfully!")
         logger.info(f"📁 Results available in: {pipeline.config.paths.OUTPUT_DIR}")
+        
+        # Enhanced summary
+        if 'training' in results['results']:
+            training_results = results['results']['training']
+            logger.info("📊 Training Summary:")
+            for latent_dim in results['latent_dims_explored']:
+                if latent_dim in training_results:
+                    models_count = sum(1 for strategy_results in training_results[latent_dim].values() 
+                                     for results in strategy_results.values() 
+                                     if 'error' not in results)
+                    logger.info(f"  Latent {latent_dim}: {models_count} successful models")
+        
+        if 'sampling' in results['results']:
+            logger.info("📊 Sampling Summary:")
+            logger.info(f"  Methods used: {', '.join(args.methods)}")
+            logger.info(f"  Equiprobable: Uses Gaussian quantiles")
+            logger.info(f"  Latin Hypercube: {args.lhs_criterion} criterion")
+        
+        if args.create_comparison:
+            logger.info("📊 Comprehensive comparison created in latent_dimension_comparison/")
         
     except KeyboardInterrupt:
         logger.info("\n⚠️ Pipeline interrupted by user")

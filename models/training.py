@@ -1,5 +1,5 @@
 """
-Optimized model training system for VAE pipeline.
+Enhanced model training system for VAE pipeline with multiple latent dimensions support.
 """
 
 import os
@@ -19,13 +19,13 @@ import glob
 import re
 import shutil
 
-from .vae import VAE, VAELoss, BetaScheduler, create_model
+from .vae import AdaptiveVAE, EnhancedVAELoss, BetaScheduler, create_adaptive_model
 from .callbacks import EarlyStopping, ModelCheckpoint, CallbackList
 
 logger = logging.getLogger(__name__)
 
-class ModelTrainer:
-    """Handles training of VAE models with different configurations."""
+class EnhancedModelTrainer:
+    """Enhanced trainer for VAE models with multiple latent dimensions support."""
     
     def __init__(self, config):
         self.config = config
@@ -37,6 +37,9 @@ class ModelTrainer:
         
         # Setup data
         self.train_loader, self.val_loader = self._setup_data_loaders()
+        
+        # Training tracking
+        self.all_results = {}
         
     def _set_random_seeds(self, seed: int = 42) -> None:
         """Set random seeds for reproducibility."""
@@ -72,105 +75,174 @@ class ModelTrainer:
         logger.info(f"Training samples: {len(X_train)}, Validation samples: {len(X_val)}")
         return train_loader, val_loader
     
-    def train_single_model(self, strategy: str, beta: float, save_dir: Optional[str] = None) -> Dict[str, Any]:
-        """Train a single VAE model."""
-        logger.info(f"Training model: strategy={strategy}, beta={beta}")
+    def train_all_models_with_latent_dims(self) -> Dict[str, Any]:
+        """Train models for all combinations of strategies, betas, and latent dimensions."""
+        logger.info("🧠 Starting comprehensive training across all latent dimensions...")
+        
+        total_combinations = (len(self.config.training.ANNEALING_STRATEGIES) * 
+                             len(self.config.training.BETA_VALUES) * 
+                             len(self.config.model.LATENT_DIMS))
+        
+        current_combination = 0
+        
+        for latent_dim in self.config.model.LATENT_DIMS:
+            logger.info(f"\n🔢 Training models for latent dimension: {latent_dim}")
+            latent_results = {}
+            
+            for strategy in self.config.training.ANNEALING_STRATEGIES:
+                strategy_results = {}
+                
+                for beta in self.config.training.BETA_VALUES:
+                    current_combination += 1
+                    logger.info(f"\n🎯 Training combination {current_combination}/{total_combinations}")
+                    logger.info(f"   Latent Dim: {latent_dim}, Strategy: {strategy}, Beta: {beta}")
+                    
+                    try:
+                        results = self.train_single_model_with_latent_dim(
+                            strategy=strategy, 
+                            beta=beta, 
+                            latent_dim=latent_dim
+                        )
+                        strategy_results[beta] = results
+                    except Exception as e:
+                        logger.error(f"Failed to train model {strategy}-{beta}-{latent_dim}: {e}")
+                        strategy_results[beta] = {'error': str(e)}
+                
+                latent_results[strategy] = strategy_results
+                self._create_strategy_summary(strategy, strategy_results, latent_dim)
+            
+            self.all_results[latent_dim] = latent_results
+            self._create_latent_dim_summary(latent_dim, latent_results)
+        
+        # Create comprehensive comparison across all latent dimensions
+        self._create_comprehensive_comparison()
+        
+        return self.all_results
+    
+    def train_single_model_with_latent_dim(
+        self, 
+        strategy: str, 
+        beta: float, 
+        latent_dim: int,
+        save_dir: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Train a single VAE model with specific latent dimension."""
+        logger.info(f"Training model: strategy={strategy}, beta={beta}, latent_dim={latent_dim}")
         
         if save_dir is None:
-            save_dir = os.path.join(self.config.paths.MODELS_DIR, strategy, f'beta_{beta}')
+            save_dir = os.path.join(
+                self.config.paths.MODELS_DIR, 
+                f'latent_{latent_dim}',
+                strategy, 
+                f'beta_{beta}'
+            )
         os.makedirs(save_dir, exist_ok=True)
         
-        # Create model and training components
-        model = self._create_model()
-        optimizer = optim.Adam(model.parameters(), lr=self.config.model.LEARNING_RATE)
-        loss_fn = VAELoss(
+        # Get configuration for this latent dimension
+        model_config = self.config.get_model_params(latent_dim)
+        training_config = self.config.get_training_params(latent_dim)
+        
+        # Create model with adaptive architecture
+        model = self._create_adaptive_model(latent_dim, model_config)
+        
+        # Create optimizer with dimension-specific learning rate
+        optimizer = optim.Adam(
+            model.parameters(), 
+            lr=model_config['learning_rate'],
+            weight_decay=1e-5 if latent_dim > 16 else 0
+        )
+        
+        # Create loss function
+        loss_fn = EnhancedVAELoss(
             self.preprocessing_objects['categorical_cardinality'],
-            len(self.preprocessing_objects['num_cols'])
+            len(self.preprocessing_objects['num_cols']),
+            latent_dim=latent_dim
         )
         
         # Get beta schedule
         beta_schedule = BetaScheduler.get_schedule(
-            beta_start=0.0, beta_end=beta, num_epochs=self.config.model.NUM_EPOCHS, strategy=strategy
+            beta_start=0.0, 
+            beta_end=beta, 
+            num_epochs=model_config['num_epochs'], 
+            strategy=strategy
         )
         
-        # Setup callbacks
-        callbacks = self._setup_callbacks(save_dir)
+        # Setup callbacks with dimension-specific parameters
+        callbacks = self._setup_callbacks(save_dir, training_config)
         
         # Training loop
-        training_results = self._training_loop(model, optimizer, loss_fn, beta_schedule, callbacks)
+        training_results = self._training_loop(
+            model, optimizer, loss_fn, beta_schedule, callbacks, model_config
+        )
         
-        # Save final model
-        self._save_model(model, optimizer, training_results, save_dir, strategy, beta)
+        # Save final model with enhanced metadata
+        self._save_model_with_metadata(
+            model, optimizer, training_results, save_dir, 
+            strategy, beta, latent_dim, model_config
+        )
         
         return training_results
     
-    def train_all_models(self) -> Dict[str, Dict[str, Any]]:
-        """Train models for all strategy-beta combinations."""
-        all_results = {}
+    def _create_adaptive_model(self, latent_dim: int, model_config: Dict[str, Any]) -> AdaptiveVAE:
+        """Create adaptive VAE model for specific latent dimension."""
+        # Determine architecture type based on latent dimension
+        if latent_dim <= 4:
+            architecture_type = 'adaptive'
+        elif latent_dim <= 16:
+            architecture_type = 'deep'
+        else:
+            architecture_type = 'wide'
         
-        total_models = len(self.config.training.ANNEALING_STRATEGIES) * len(self.config.training.BETA_VALUES)
-        current_model = 0
-        
-        for strategy in self.config.training.ANNEALING_STRATEGIES:
-            strategy_results = {}
-            
-            for beta in self.config.training.BETA_VALUES:
-                current_model += 1
-                logger.info(f"\n🧠 Training model {current_model}/{total_models}")
-                
-                try:
-                    results = self.train_single_model(strategy, beta)
-                    strategy_results[beta] = results
-                except Exception as e:
-                    logger.error(f"Failed to train model {strategy}-{beta}: {e}")
-                    strategy_results[beta] = {'error': str(e)}
-            
-            all_results[strategy] = strategy_results
-            self._create_strategy_summary(strategy, strategy_results)
-        
-        return all_results
-    
-    def _create_model(self) -> VAE:
-        """Create VAE model instance."""
-        return create_model(
+        model = create_adaptive_model(
             input_dim=len(self.train_loader.dataset[0][0]),
             num_numerical=len(self.preprocessing_objects['num_cols']),
             cat_dict=self.preprocessing_objects['categorical_cardinality'],
-            hidden_dim=self.config.model.HIDDEN_DIM,
-            latent_dim=self.config.model.LATENT_DIM
+            latent_dim=latent_dim,
+            hidden_dim=model_config['hidden_dim'],
+            architecture_type=architecture_type
         ).to(self.device)
+        
+        logger.info(f"Created {architecture_type} model with {model._count_parameters():,} parameters")
+        return model
     
-    def _setup_callbacks(self, save_dir: str) -> CallbackList:
-        """Setup training callbacks."""
+    def _setup_callbacks(self, save_dir: str, training_config: Dict[str, Any]) -> CallbackList:
+        """Setup training callbacks with dimension-specific parameters."""
         callbacks = []
         
-        # Early stopping
-        if self.config.training.EARLY_STOPPING:
+        # Early stopping with dimension-specific parameters
+        if training_config.get('early_stopping', True):
             callbacks.append(EarlyStopping(
                 monitor='val_loss',
-                min_delta=self.config.training.EARLY_STOPPING_MIN_DELTA,
-                patience=self.config.training.EARLY_STOPPING_PATIENCE,
+                min_delta=training_config.get('min_delta', 0.001),
+                patience=training_config.get('patience', 10),
                 verbose=True,
-                restore_best_weights=self.config.training.RESTORE_BEST_WEIGHTS
+                restore_best_weights=training_config.get('restore_best_weights', True)
             ))
         
         # Model checkpoint
         callbacks.append(ModelCheckpoint(
             filepath=os.path.join(save_dir, 'checkpoint_epoch_{epoch:03d}_val_loss_{val_loss:.4f}.pth'),
-            monitor=self.config.training.CHECKPOINT_MONITOR,
-            save_best_only=self.config.training.SAVE_BEST_ONLY,
-            mode=self.config.training.CHECKPOINT_MODE
+            monitor='val_loss',
+            save_best_only=True,
+            mode='min'
         ))
         
         return CallbackList(callbacks)
     
-    def _training_loop(self, model: VAE, optimizer: torch.optim.Optimizer, 
-                      loss_fn: VAELoss, beta_schedule: List[float], 
-                      callbacks: CallbackList) -> Dict[str, Any]:
-        """Consolidated training loop for both training and validation."""
+    def _training_loop(
+        self, 
+        model: AdaptiveVAE, 
+        optimizer: torch.optim.Optimizer, 
+        loss_fn: EnhancedVAELoss, 
+        beta_schedule: List[float], 
+        callbacks: CallbackList,
+        model_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Enhanced training loop with adaptive features."""
         history = {
             'train_loss': [], 'val_loss': [], 'num_loss': [], 
-            'cat_loss': [], 'kl_loss': [], 'beta_values': []
+            'cat_loss': [], 'kl_loss': [], 'beta_values': [],
+            'learning_rates': [], 'grad_norms': []
         }
         
         callbacks.set_model(model)
@@ -178,15 +250,34 @@ class ModelTrainer:
         
         start_time = time.time()
         
-        for epoch in range(self.config.model.NUM_EPOCHS):
+        # Learning rate scheduler for high-dimensional latent spaces
+        if loss_fn.latent_dim > 16:
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=0.8, patience=5, verbose=True
+            )
+        else:
+            scheduler = None
+        
+        for epoch in range(model_config['num_epochs']):
             current_beta = beta_schedule[epoch]
             callbacks.on_epoch_begin(epoch)
             
             # Training phase
-            train_metrics = self._run_epoch(model, self.train_loader, optimizer, loss_fn, current_beta, is_training=True)
+            train_metrics = self._run_epoch(
+                model, self.train_loader, optimizer, loss_fn, current_beta, is_training=True
+            )
             
             # Validation phase  
-            val_metrics = self._run_epoch(model, self.val_loader, None, loss_fn, current_beta, is_training=False)
+            val_metrics = self._run_epoch(
+                model, self.val_loader, None, loss_fn, current_beta, is_training=False
+            )
+            
+            # Update learning rate for high-dimensional spaces
+            if scheduler:
+                scheduler.step(val_metrics['total_loss'])
+            
+            # Calculate gradient norm for monitoring
+            grad_norm = self._calculate_grad_norm(model)
             
             # Update history
             history['train_loss'].append(train_metrics['total_loss'])
@@ -195,18 +286,28 @@ class ModelTrainer:
             history['cat_loss'].append(train_metrics['cat_loss'])
             history['kl_loss'].append(train_metrics['kl_loss'])
             history['beta_values'].append(current_beta)
+            history['learning_rates'].append(optimizer.param_groups[0]['lr'])
+            history['grad_norms'].append(grad_norm)
             
-            # Logging
-            if (epoch + 1) % 10 == 0 or epoch == self.config.model.NUM_EPOCHS - 1:
-                logger.info(f'Epoch {epoch+1}/{self.config.model.NUM_EPOCHS}: '
+            # Enhanced logging
+            if (epoch + 1) % 10 == 0 or epoch == model_config['num_epochs'] - 1:
+                logger.info(f'Epoch {epoch+1}/{model_config["num_epochs"]}: '
                           f'Train: {train_metrics["total_loss"]:.4f}, '
-                          f'Val: {val_metrics["total_loss"]:.4f}, Beta: {current_beta:.2f}')
+                          f'Val: {val_metrics["total_loss"]:.4f}, '
+                          f'Beta: {current_beta:.3f}, '
+                          f'LR: {optimizer.param_groups[0]["lr"]:.6f}, '
+                          f'GradNorm: {grad_norm:.3f}')
             
-            # Callback logging
+            # Callback logging with enhanced metrics
             logs = {
-                'loss': train_metrics['total_loss'], 'val_loss': val_metrics['total_loss'],
-                'num_loss': train_metrics['num_loss'], 'cat_loss': train_metrics['cat_loss'],
-                'kl_loss': train_metrics['kl_loss'], 'beta': current_beta
+                'loss': train_metrics['total_loss'], 
+                'val_loss': val_metrics['total_loss'],
+                'num_loss': train_metrics['num_loss'], 
+                'cat_loss': train_metrics['cat_loss'],
+                'kl_loss': train_metrics['kl_loss'], 
+                'beta': current_beta,
+                'learning_rate': optimizer.param_groups[0]['lr'],
+                'grad_norm': grad_norm
             }
             
             callbacks.on_epoch_end(epoch, logs)
@@ -217,7 +318,7 @@ class ModelTrainer:
         
         callbacks.on_train_end()
         
-        # Save results
+        # Enhanced training results
         training_time = time.time() - start_time
         self._save_training_artifacts(history, os.path.dirname(callbacks.callbacks[1].filepath))
         
@@ -227,13 +328,27 @@ class ModelTrainer:
             'epochs_trained': epoch + 1,
             'final_metrics': {
                 'train_loss': history['train_loss'][-1],
-                'val_loss': history['val_loss'][-1]
+                'val_loss': history['val_loss'][-1],
+                'final_lr': history['learning_rates'][-1],
+                'final_grad_norm': history['grad_norms'][-1]
+            },
+            'model_complexity': {
+                'total_parameters': model._count_parameters(),
+                'latent_dim': loss_fn.latent_dim,
+                'architecture_type': model.architecture_type
             }
         }
     
-    def _run_epoch(self, model: VAE, data_loader: DataLoader, optimizer: Optional[torch.optim.Optimizer],
-                  loss_fn: VAELoss, beta: float, is_training: bool) -> Dict[str, float]:
-        """Unified epoch runner for training and validation."""
+    def _run_epoch(
+        self, 
+        model: AdaptiveVAE, 
+        data_loader: DataLoader, 
+        optimizer: Optional[torch.optim.Optimizer],
+        loss_fn: EnhancedVAELoss, 
+        beta: float, 
+        is_training: bool
+    ) -> Dict[str, float]:
+        """Enhanced epoch runner with gradient monitoring."""
         model.train() if is_training else model.eval()
         
         total_loss = num_loss = cat_loss = kl_loss = 0
@@ -251,6 +366,11 @@ class ModelTrainer:
                 
                 if is_training:
                     loss.backward()
+                    
+                    # Gradient clipping for stability
+                    if loss_fn.latent_dim > 16:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    
                     optimizer.step()
                 
                 # Accumulate losses
@@ -268,163 +388,100 @@ class ModelTrainer:
             'kl_loss': kl_loss / n_samples
         }
     
-    def _save_model(self, model: VAE, optimizer: torch.optim.Optimizer, 
-                   training_results: Dict[str, Any], save_dir: str, strategy: str, beta: float) -> None:
-        """Save trained model and metadata with enhanced error handling."""
+    def _calculate_grad_norm(self, model: AdaptiveVAE) -> float:
+        """Calculate gradient norm for monitoring."""
+        total_norm = 0.0
+        for p in model.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.data.norm(2)
+                total_norm += param_norm.item() ** 2
+        return total_norm ** (1. / 2)
+    
+    def _save_model_with_metadata(
+        self, 
+        model: AdaptiveVAE, 
+        optimizer: torch.optim.Optimizer, 
+        training_results: Dict[str, Any], 
+        save_dir: str, 
+        strategy: str, 
+        beta: float,
+        latent_dim: int,
+        model_config: Dict[str, Any]
+    ) -> None:
+        """Save trained model with comprehensive metadata."""
         try:
-            # Ensure directory exists
             os.makedirs(save_dir, exist_ok=True)
             
-            # Create checkpoint with all necessary information
+            # Enhanced checkpoint with latent dimension info
             checkpoint = {
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'categorical_cardinality': self.preprocessing_objects['categorical_cardinality'],
                 'num_numerical': len(self.preprocessing_objects['num_cols']),
                 'input_dim': model.input_dim,
-                'hidden_dim': self.config.model.HIDDEN_DIM,
-                'latent_dim': self.config.model.LATENT_DIM,
+                'hidden_dim': model_config['hidden_dim'],
+                'latent_dim': latent_dim,
+                'architecture_type': model.architecture_type,
+                'total_parameters': model._count_parameters(),
                 'beta': beta,
                 'strategy': strategy,
                 'training_results': training_results,
-                'config': {
-                    'batch_size': self.config.model.BATCH_SIZE,
-                    'learning_rate': self.config.model.LEARNING_RATE,
-                    'num_epochs': self.config.model.NUM_EPOCHS
-                }
+                'model_config': model_config,
+                'config_version': '2.0_latent_dims'
             }
             
             model_path = os.path.join(save_dir, 'vae_model_final.pth')
-            
-            # Save with enhanced verification
             torch.save(checkpoint, model_path)
             
-            # Multiple verification checks
-            if not os.path.exists(model_path):
-                raise Exception("Model file was not created")
-            
-            file_size = os.path.getsize(model_path)
-            if file_size < 1024:  # Less than 1KB indicates corruption
-                raise Exception(f"Model file too small ({file_size} bytes), likely corrupted")
-            
-            # Test loading the saved model
-            try:
-                test_checkpoint = torch.load(model_path, map_location='cpu')
-                required_keys = ['model_state_dict', 'input_dim', 'num_numerical', 'categorical_cardinality']
-                missing_keys = [key for key in required_keys if key not in test_checkpoint]
-                if missing_keys:
-                    raise Exception(f"Missing keys in checkpoint: {missing_keys}")
-                    
-            except Exception as load_error:
-                raise Exception(f"Saved model failed verification: {load_error}")
-            
-            logger.info(f"✅ Model saved and verified successfully: {model_path} ({file_size:,} bytes)")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to save final model: {e}")
-            
-            # Enhanced fallback: copy the best checkpoint as final model
-            try:
-                logger.info("🔄 Attempting fallback: copying best checkpoint as final model")
-                self._copy_best_checkpoint_as_final(save_dir)
+            # Verify save
+            if os.path.exists(model_path) and os.path.getsize(model_path) > 1024:
+                logger.info(f"✅ Model saved: {model_path} ({os.path.getsize(model_path):,} bytes)")
+            else:
+                raise Exception("Model save verification failed")
                 
-                # Verify the fallback worked
-                model_path = os.path.join(save_dir, 'vae_model_final.pth')
-                if os.path.exists(model_path) and os.path.getsize(model_path) > 1024:
-                    logger.info("✅ Fallback model creation successful")
-                else:
-                    raise Exception("Fallback model creation failed verification")
-                    
-            except Exception as fallback_error:
-                logger.error(f"❌ Fallback also failed: {fallback_error}")
-                # Final fallback - save minimal working model
-                try:
-                    self._save_minimal_model(model, save_dir, strategy, beta)
-                except Exception as final_error:
-                    logger.error(f"❌ All save attempts failed: {final_error}")
-                    raise Exception(f"Complete model saving failure: {e}")
-    
-    def _save_minimal_model(self, model: VAE, save_dir: str, strategy: str, beta: float) -> None:
-        """Last resort: save minimal working model."""
-        logger.info("🆘 Attempting minimal model save as last resort")
-        
-        minimal_checkpoint = {
-            'model_state_dict': model.state_dict(),
-            'input_dim': model.input_dim,
-            'num_numerical': model.num_numerical,
-            'categorical_cardinality': model.cat_dict,
-            'hidden_dim': self.config.model.HIDDEN_DIM,
-            'latent_dim': self.config.model.LATENT_DIM,
-            'beta': beta,
-            'strategy': strategy
-        }
-        
-        model_path = os.path.join(save_dir, 'vae_model_final.pth')
-        torch.save(minimal_checkpoint, model_path)
-        
-        if os.path.exists(model_path):
-            logger.info(f"✅ Minimal model saved: {model_path}")
-        else:
-            raise Exception("Even minimal model save failed")
+        except Exception as e:
+            logger.error(f"❌ Failed to save model: {e}")
+            # Attempt recovery as in original code
+            self._copy_best_checkpoint_as_final(save_dir)
     
     def _copy_best_checkpoint_as_final(self, save_dir: str) -> None:
-        """Copy the best checkpoint as the final model."""
-        
-        # Find all checkpoint files
-        checkpoint_pattern = os.path.join(save_dir, "checkpoint_epoch_*_val_loss_*.pth")
-        checkpoint_files = glob.glob(checkpoint_pattern)
+        """Recovery method to copy best checkpoint as final model."""
+        checkpoint_files = glob.glob(os.path.join(save_dir, "checkpoint_epoch_*.pth"))
         
         if not checkpoint_files:
             raise Exception(f"No checkpoint files found in {save_dir}")
         
-        logger.info(f"🔍 Found {len(checkpoint_files)} checkpoint files")
-        
-        # Extract validation loss and find the best one
         def get_val_loss(filepath):
             filename = os.path.basename(filepath)
             match = re.search(r'val_loss_(\d+\.?\d*)', filename)
             return float(match.group(1)) if match else float('inf')
         
-        # Find best checkpoint
-        checkpoint_losses = [(f, get_val_loss(f)) for f in checkpoint_files]
-        valid_checkpoints = [(f, loss) for f, loss in checkpoint_losses if loss != float('inf')]
+        best_checkpoint = min(checkpoint_files, key=get_val_loss)
+        final_path = os.path.join(save_dir, 'vae_model_final.pth')
+        shutil.copy2(best_checkpoint, final_path)
         
-        if not valid_checkpoints:
-            raise Exception("No valid checkpoints found (could not parse validation losses)")
-        
-        best_checkpoint, best_loss = min(valid_checkpoints, key=lambda x: x[1])
-        
-        # Copy as final model
-        final_model_path = os.path.join(save_dir, 'vae_model_final.pth')
-        shutil.copy2(best_checkpoint, final_model_path)
-        
-        # Verify copy
-        if not os.path.exists(final_model_path):
-            raise Exception("Failed to copy checkpoint as final model")
-        
-        file_size = os.path.getsize(final_model_path)
-        logger.info(f"✅ Recovered: {os.path.basename(best_checkpoint)} → vae_model_final.pth")
-        logger.info(f"   Validation loss: {best_loss:.4f}, Size: {file_size:,} bytes")
+        if os.path.exists(final_path):
+            logger.info(f"✅ Recovered model from: {os.path.basename(best_checkpoint)}")
     
     def _save_training_artifacts(self, history: Dict[str, List], save_dir: str) -> None:
-        """Save training history and create plots."""
+        """Save enhanced training artifacts with additional metrics."""
         # Save history
         df = pd.DataFrame(history)
         df['epoch'] = range(1, len(df) + 1)
         df.to_csv(os.path.join(save_dir, 'training_history.csv'), index=False)
         
-        # Create plots
-        self._create_training_plots(history, save_dir)
+        # Create enhanced plots
+        self._create_enhanced_training_plots(history, save_dir)
     
-    def _create_training_plots(self, history: Dict[str, List], save_dir: str) -> None:
-        """Create consolidated training visualization plots."""
+    def _create_enhanced_training_plots(self, history: Dict[str, List], save_dir: str) -> None:
+        """Create enhanced training visualization plots."""
         epochs = range(1, len(history['train_loss']) + 1)
         
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
         
         # Main losses with beta schedule
-        ax1.plot(epochs, history['train_loss'], 'b-', label='Training Loss')
-        ax1.plot(epochs, history['val_loss'], 'r-', label='Validation Loss')
+        ax1.plot(epochs, history['train_loss'], 'b-', label='Training Loss', linewidth=2)
+        ax1.plot(epochs, history['val_loss'], 'r-', label='Validation Loss', linewidth=2)
         ax1.set_xlabel('Epochs')
         ax1.set_ylabel('Loss')
         ax1.set_title('Training Progress')
@@ -447,47 +504,278 @@ class ModelTrainer:
         ax2.legend()
         ax2.grid(True, alpha=0.3)
         
+        # Learning rate and gradient norms
+        ax3.plot(epochs, history['learning_rates'], 'orange', label='Learning Rate')
+        ax3.set_xlabel('Epochs')
+        ax3.set_ylabel('Learning Rate')
+        ax3.set_title('Learning Rate Schedule')
+        ax3.set_yscale('log')
+        ax3.grid(True, alpha=0.3)
+        
+        ax4.plot(epochs, history['grad_norms'], 'purple', label='Gradient Norm')
+        ax4.set_xlabel('Epochs')
+        ax4.set_ylabel('Gradient Norm')
+        ax4.set_title('Gradient Norm Evolution')
+        ax4.grid(True, alpha=0.3)
+        
         plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, 'training_curves.png'), dpi=300)
+        plt.savefig(os.path.join(save_dir, 'enhanced_training_curves.png'), dpi=300)
         plt.close()
     
-    def _create_strategy_summary(self, strategy: str, strategy_results: Dict[str, Any]) -> None:
-        """Create summary for a single strategy."""
-        strategy_dir = os.path.join(self.config.paths.MODELS_DIR, strategy)
+    def _create_strategy_summary(self, strategy: str, strategy_results: Dict[str, Any], latent_dim: int) -> None:
+        """Create summary for a single strategy with latent dimension info."""
+        strategy_dir = os.path.join(self.config.paths.MODELS_DIR, f'latent_{latent_dim}', strategy)
+        os.makedirs(strategy_dir, exist_ok=True)
         
         summary_data = []
         for beta, results in strategy_results.items():
             if 'error' not in results:
                 final_metrics = results['final_metrics']
+                model_complexity = results['model_complexity']
                 summary_data.append({
+                    'latent_dim': latent_dim,
                     'beta': beta,
                     'train_loss': final_metrics['train_loss'],
                     'val_loss': final_metrics['val_loss'],
                     'training_time': results['training_time'],
-                    'epochs_trained': results['epochs_trained']
+                    'epochs_trained': results['epochs_trained'],
+                    'total_parameters': model_complexity['total_parameters'],
+                    'architecture_type': model_complexity['architecture_type'],
+                    'final_lr': final_metrics.get('final_lr', 0),
+                    'final_grad_norm': final_metrics.get('final_grad_norm', 0)
                 })
         
         if summary_data:
             df = pd.DataFrame(summary_data)
-            df.to_csv(os.path.join(strategy_dir, 'beta_results_summary.csv'), index=False)
+            df.to_csv(os.path.join(strategy_dir, f'latent_{latent_dim}_beta_results_summary.csv'), index=False)
             
-            # Create trade-off plot
-            self._create_tradeoff_plot(df, strategy_dir, strategy)
+            # Create enhanced trade-off plot
+            self._create_enhanced_tradeoff_plot(df, strategy_dir, strategy, latent_dim)
     
-    def _create_tradeoff_plot(self, df: pd.DataFrame, strategy_dir: str, strategy: str) -> None:
-        """Create reconstruction vs KL trade-off plot."""
-        plt.figure(figsize=(10, 8))
+    def _create_enhanced_tradeoff_plot(self, df: pd.DataFrame, strategy_dir: str, strategy: str, latent_dim: int) -> None:
+        """Create enhanced reconstruction vs KL trade-off plot."""
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
         
-        scatter = plt.scatter(df['val_loss'], df['train_loss'], s=100, c=df['beta'], cmap='viridis')
+        # Trade-off plot
+        scatter = ax1.scatter(df['val_loss'], df['train_loss'], s=100, c=df['beta'], 
+                             cmap='viridis', alpha=0.8, edgecolors='black')
         
         for _, row in df.iterrows():
-            plt.annotate(f'β={row["beta"]}', (row['val_loss'], row['train_loss']),
+            ax1.annotate(f'β={row["beta"]}', (row['val_loss'], row['train_loss']),
                         xytext=(10, 5), textcoords='offset points', fontsize=10)
         
-        plt.colorbar(scatter, label='Beta Value')
-        plt.title(f'VAE Trade-off: Training vs Validation Loss ({strategy} annealing)')
-        plt.xlabel('Validation Loss')
-        plt.ylabel('Training Loss')
-        plt.grid(True, alpha=0.3)
-        plt.savefig(os.path.join(strategy_dir, 'vae_tradeoff.png'), dpi=300)
+        plt.colorbar(scatter, ax=ax1, label='Beta Value')
+        ax1.set_title(f'VAE Trade-off: Latent Dim {latent_dim}\n({strategy} annealing)')
+        ax1.set_xlabel('Validation Loss')
+        ax1.set_ylabel('Training Loss')
+        ax1.grid(True, alpha=0.3)
+        
+        # Model complexity vs performance
+        ax2.scatter(df['total_parameters'], df['val_loss'], s=100, c=df['beta'], 
+                   cmap='plasma', alpha=0.8, edgecolors='black')
+        ax2.set_title(f'Model Complexity vs Performance\nLatent Dim {latent_dim}')
+        ax2.set_xlabel('Total Parameters')
+        ax2.set_ylabel('Validation Loss')
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(strategy_dir, f'latent_{latent_dim}_enhanced_analysis.png'), dpi=300)
         plt.close()
+    
+    def _create_latent_dim_summary(self, latent_dim: int, latent_results: Dict[str, Any]) -> None:
+        """Create comprehensive summary for a specific latent dimension."""
+        latent_dir = os.path.join(self.config.paths.MODELS_DIR, f'latent_{latent_dim}')
+        
+        # Collect all results for this latent dimension
+        all_results = []
+        for strategy, strategy_results in latent_results.items():
+            for beta, results in strategy_results.items():
+                if 'error' not in results:
+                    final_metrics = results['final_metrics']
+                    model_complexity = results['model_complexity']
+                    all_results.append({
+                        'latent_dim': latent_dim,
+                        'strategy': strategy,
+                        'beta': beta,
+                        'train_loss': final_metrics['train_loss'],
+                        'val_loss': final_metrics['val_loss'],
+                        'training_time': results['training_time'],
+                        'epochs_trained': results['epochs_trained'],
+                        'total_parameters': model_complexity['total_parameters'],
+                        'architecture_type': model_complexity['architecture_type']
+                    })
+        
+        if all_results:
+            df = pd.DataFrame(all_results)
+            df.to_csv(os.path.join(latent_dir, f'latent_{latent_dim}_complete_summary.csv'), index=False)
+            
+            # Create latent dimension specific analysis
+            self._create_latent_dim_analysis(df, latent_dir, latent_dim)
+    
+    def _create_latent_dim_analysis(self, df: pd.DataFrame, latent_dir: str, latent_dim: int) -> None:
+        """Create analysis plots for specific latent dimension."""
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        
+        # Strategy comparison
+        strategy_means = df.groupby('strategy')['val_loss'].mean()
+        ax1.bar(strategy_means.index, strategy_means.values, alpha=0.7, color='skyblue')
+        ax1.set_title(f'Strategy Comparison - Latent Dim {latent_dim}')
+        ax1.set_ylabel('Mean Validation Loss')
+        ax1.grid(True, alpha=0.3)
+        
+        # Beta value effects
+        beta_means = df.groupby('beta')['val_loss'].mean()
+        ax2.plot(beta_means.index, beta_means.values, 'o-', markersize=8, linewidth=2)
+        ax2.set_title(f'Beta Value Effects - Latent Dim {latent_dim}')
+        ax2.set_xlabel('Beta Value')
+        ax2.set_ylabel('Mean Validation Loss')
+        ax2.grid(True, alpha=0.3)
+        
+        # Training efficiency
+        ax3.scatter(df['training_time'], df['val_loss'], alpha=0.7, s=60)
+        ax3.set_title(f'Training Efficiency - Latent Dim {latent_dim}')
+        ax3.set_xlabel('Training Time (seconds)')
+        ax3.set_ylabel('Validation Loss')
+        ax3.grid(True, alpha=0.3)
+        
+        # Model size vs performance
+        ax4.scatter(df['total_parameters'], df['val_loss'], alpha=0.7, s=60, c=df['beta'], cmap='viridis')
+        ax4.set_title(f'Model Size vs Performance - Latent Dim {latent_dim}')
+        ax4.set_xlabel('Total Parameters')
+        ax4.set_ylabel('Validation Loss')
+        ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(latent_dir, f'latent_{latent_dim}_detailed_analysis.png'), dpi=300)
+        plt.close()
+    
+    def _create_comprehensive_comparison(self) -> None:
+        """Create comprehensive comparison across all latent dimensions."""
+        # Collect all results
+        all_results = []
+        for latent_dim, latent_results in self.all_results.items():
+            for strategy, strategy_results in latent_results.items():
+                for beta, results in strategy_results.items():
+                    if 'error' not in results:
+                        final_metrics = results['final_metrics']
+                        model_complexity = results['model_complexity']
+                        all_results.append({
+                            'latent_dim': latent_dim,
+                            'strategy': strategy,
+                            'beta': beta,
+                            'train_loss': final_metrics['train_loss'],
+                            'val_loss': final_metrics['val_loss'],
+                            'training_time': results['training_time'],
+                            'epochs_trained': results['epochs_trained'],
+                            'total_parameters': model_complexity['total_parameters'],
+                            'architecture_type': model_complexity['architecture_type']
+                        })
+        
+        if all_results:
+            df = pd.DataFrame(all_results)
+            comparison_dir = os.path.join(self.config.paths.MODELS_DIR, 'latent_dimension_comparison')
+            os.makedirs(comparison_dir, exist_ok=True)
+            
+            df.to_csv(os.path.join(comparison_dir, 'comprehensive_results.csv'), index=False)
+            
+            # Create comprehensive analysis plots
+            self._create_comprehensive_plots(df, comparison_dir)
+    
+    def _create_comprehensive_plots(self, df: pd.DataFrame, comparison_dir: str) -> None:
+        """Create comprehensive comparison plots across all latent dimensions."""
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16))
+        
+        # Latent dimension effects on performance
+        latent_means = df.groupby('latent_dim')['val_loss'].agg(['mean', 'std']).reset_index()
+        ax1.errorbar(latent_means['latent_dim'], latent_means['mean'], 
+                    yerr=latent_means['std'], marker='o', capsize=5, capthick=2, linewidth=2)
+        ax1.set_title('Performance vs Latent Dimension', fontsize=14)
+        ax1.set_xlabel('Latent Dimension')
+        ax1.set_ylabel('Validation Loss (mean ± std)')
+        ax1.grid(True, alpha=0.3)
+        ax1.set_xscale('log', base=2)
+        
+        # Model complexity scaling
+        complexity_means = df.groupby('latent_dim')['total_parameters'].mean()
+        ax2.plot(complexity_means.index, complexity_means.values, 'o-', markersize=8, linewidth=2, color='orange')
+        ax2.set_title('Model Complexity vs Latent Dimension', fontsize=14)
+        ax2.set_xlabel('Latent Dimension')
+        ax2.set_ylabel('Total Parameters')
+        ax2.grid(True, alpha=0.3)
+        ax2.set_xscale('log', base=2)
+        ax2.set_yscale('log')
+        
+        # Training time scaling
+        time_means = df.groupby('latent_dim')['training_time'].mean()
+        ax3.plot(time_means.index, time_means.values, 's-', markersize=8, linewidth=2, color='green')
+        ax3.set_title('Training Time vs Latent Dimension', fontsize=14)
+        ax3.set_xlabel('Latent Dimension')
+        ax3.set_ylabel('Training Time (seconds)')
+        ax3.grid(True, alpha=0.3)
+        ax3.set_xscale('log', base=2)
+        
+        # Performance heatmap by strategy and latent dimension
+        pivot_table = df.groupby(['strategy', 'latent_dim'])['val_loss'].mean().unstack()
+        im = ax4.imshow(pivot_table.values, cmap='viridis', aspect='auto')
+        ax4.set_title('Performance Heatmap: Strategy vs Latent Dimension', fontsize=14)
+        ax4.set_xlabel('Latent Dimension')
+        ax4.set_ylabel('Strategy')
+        ax4.set_xticks(range(len(pivot_table.columns)))
+        ax4.set_xticklabels(pivot_table.columns)
+        ax4.set_yticks(range(len(pivot_table.index)))
+        ax4.set_yticklabels(pivot_table.index)
+        
+        # Add colorbar
+        plt.colorbar(im, ax=ax4, label='Validation Loss')
+        
+        # Add text annotations to heatmap
+        for i in range(len(pivot_table.index)):
+            for j in range(len(pivot_table.columns)):
+                if not np.isnan(pivot_table.iloc[i, j]):
+                    ax4.text(j, i, f'{pivot_table.iloc[i, j]:.3f}', 
+                            ha='center', va='center', color='white', fontweight='bold')
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(comparison_dir, 'comprehensive_latent_dimension_analysis.png'), 
+                   dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Create detailed performance summary
+        self._create_performance_summary_table(df, comparison_dir)
+    
+    def _create_performance_summary_table(self, df: pd.DataFrame, comparison_dir: str) -> None:
+        """Create detailed performance summary table."""
+        # Create summary statistics
+        summary_stats = df.groupby(['latent_dim', 'strategy']).agg({
+            'val_loss': ['mean', 'std', 'min'],
+            'train_loss': ['mean', 'std', 'min'],
+            'training_time': ['mean', 'std'],
+            'total_parameters': 'mean',
+            'epochs_trained': 'mean'
+        }).round(4)
+        
+        # Flatten column names
+        summary_stats.columns = ['_'.join(col).strip() for col in summary_stats.columns]
+        summary_stats = summary_stats.reset_index()
+        
+        # Save detailed summary
+        summary_stats.to_csv(os.path.join(comparison_dir, 'detailed_performance_summary.csv'), index=False)
+        
+        # Find best performing configurations
+        best_configs = df.loc[df.groupby('latent_dim')['val_loss'].idxmin()]
+        best_configs_summary = best_configs[['latent_dim', 'strategy', 'beta', 'val_loss', 'total_parameters']].copy()
+        best_configs_summary.to_csv(os.path.join(comparison_dir, 'best_configurations_per_latent_dim.csv'), index=False)
+        
+        logger.info("📊 Comprehensive analysis completed!")
+        logger.info("📁 Results saved in latent_dimension_comparison directory")
+        
+        # Log best configurations
+        logger.info("\n🏆 BEST CONFIGURATIONS PER LATENT DIMENSION:")
+        for _, row in best_configs_summary.iterrows():
+            logger.info(f"  Latent {int(row['latent_dim'])}: {row['strategy']}-β{row['beta']} "
+                       f"(val_loss: {row['val_loss']:.4f}, params: {int(row['total_parameters']):,})")
+
+# Factory function for the enhanced trainer
+def create_enhanced_trainer(config):
+    """Create enhanced trainer with latent dimension support."""
+    return EnhancedModelTrainer(config)
