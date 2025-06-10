@@ -1,5 +1,5 @@
 """
-Enhanced model training system for VAE pipeline with multiple latent dimensions support.
+Enhanced training manager for multiple latent dimensions support.
 """
 
 import os
@@ -19,8 +19,8 @@ import glob
 import re
 import shutil
 
-from .vae import AdaptiveVAE, EnhancedVAELoss, BetaScheduler, create_adaptive_model
-from .callbacks import EarlyStopping, ModelCheckpoint, CallbackList
+from models.vae import AdaptiveVAE, EnhancedVAELoss, BetaScheduler, create_adaptive_model
+from models.callbacks import EarlyStopping, ModelCheckpoint, CallbackList
 
 logger = logging.getLogger(__name__)
 
@@ -774,6 +774,7 @@ class EnhancedModelTrainer:
         for _, row in best_configs_summary.iterrows():
             logger.info(f"  Latent {int(row['latent_dim'])}: {row['strategy']}-β{row['beta']} "
                        f"(val_loss: {row['val_loss']:.4f}, params: {int(row['total_parameters']):,})")
+
 
 # Factory function for the enhanced trainer
 def create_enhanced_trainer(config):
