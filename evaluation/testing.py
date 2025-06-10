@@ -1,14 +1,10 @@
 """
-Distribution testing system for evaluating sampling quality.
+Simplified testing system focused on Wasserstein distance ranking and classifier-based validation.
 """
 
 import os
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from scipy import stats
-from scipy.spatial.distance import cdist
 import torch
 import pickle
 import glob
@@ -16,20 +12,26 @@ import re
 import shutil
 from typing import Dict, List, Tuple, Optional, Any
 import logging
-import time
+from scipy.stats import wasserstein_distance
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, roc_auc_score, balanced_accuracy_score
+import matplotlib.pyplot as plt
+import seaborn as sns
 import warnings
 warnings.filterwarnings('ignore')
 
 logger = logging.getLogger(__name__)
 
-class DistributionTester:
+class SimplifiedTester:
     """
-    Tests similarity between original and sampled distributions using multiple methods.
+    Simplified testing system using Wasserstein distance and classifier-based validation.
     """
     
     def __init__(self, config):
         """
-        Initialize distribution tester.
+        Initialize simplified tester.
         
         Args:
             config: Configuration object
@@ -39,21 +41,18 @@ class DistributionTester:
         
         # Testing parameters
         self.fast_mode = os.environ.get('VAE_FAST_MODE', '0') == '1'
-        self.max_samples = 1000 if self.fast_mode else 2000  # Reduced for efficiency
-        self.n_permutations = 50 if self.fast_mode else 200  # Reduced for efficiency
+        self.max_samples = 2000 if not self.fast_mode else 1000
         
-        logger.info(f"Distribution tester initialized (fast_mode: {self.fast_mode})")
+        logger.info(f"Simplified tester initialized (fast_mode: {self.fast_mode})")
     
     def run_all_tests(self) -> Dict[str, Any]:
         """
-        Run distribution tests for all sampling results.
+        Run simplified tests for all sampling results.
         
         Returns:
-            Dictionary with all test results
+            Dictionary with test results and rankings
         """
-        logger.info("🧪 Starting comprehensive distribution testing...")
-        
-        all_results = {}
+        logger.info("🧪 Starting simplified testing with Wasserstein distance ranking...")
         
         # Load original data
         try:
@@ -62,28 +61,29 @@ class DistributionTester:
             logger.error(f"Failed to load original data: {e}")
             return {'error': f'Failed to load original data: {e}'}
         
+        all_results = []
+        
         # Process each configuration
         for strategy in self.config.training.ANNEALING_STRATEGIES:
-            strategy_results = {}
-            
             for beta in self.config.training.BETA_VALUES:
                 logger.info(f"\n📊 Testing {strategy} strategy, beta={beta}")
                 
-                beta_results = self._test_single_configuration(
+                config_results = self._test_single_configuration(
                     strategy, beta, original_df
                 )
-                strategy_results[beta] = beta_results
-            
-            all_results[strategy] = strategy_results
+                
+                if config_results:
+                    all_results.extend(config_results)
         
-        # Create overall summary
-        self._create_overall_test_summary(all_results)
+        # Create rankings and summary
+        if all_results:
+            self._create_rankings_and_summary(all_results)
+            self._create_comparison_plots(all_results)
         
-        return all_results
+        return {'results': all_results, 'total_tests': len(all_results)}
     
     def _load_original_data(self) -> pd.DataFrame:
         """Load original filtered data."""
-        # Try multiple possible data file locations
         data_paths = [
             os.path.join(self.config.paths.DATA_DIR, 'filtered_data.csv'),
             os.path.join(self.config.paths.DATA_DIR, 'data.csv'),
@@ -104,10 +104,9 @@ class DistributionTester:
         strategy: str, 
         beta: float, 
         original_df: pd.DataFrame
-    ) -> Dict[str, Any]:
+    ) -> List[Dict[str, Any]]:
         """Test a single strategy-beta configuration."""
         
-        # Find available sampling methods for this configuration
         config_dir = os.path.join(
             self.config.paths.SAMPLES_DIR, 
             strategy, 
@@ -116,38 +115,34 @@ class DistributionTester:
         
         if not os.path.exists(config_dir):
             logger.warning(f"No sampling results found for {strategy}-{beta}")
-            return {'error': 'No sampling results found'}
+            return []
         
         # Find available methods
         available_methods = self._find_available_methods(config_dir)
         
         if not available_methods:
             logger.warning(f"No valid sampling methods found for {strategy}-{beta}")
-            return {'error': 'No valid sampling methods found'}
+            return []
         
-        config_results = {}
+        config_results = []
         
         # Test each sample size
         for sample_size in self.config.training.SAMPLE_SIZES:
             logger.info(f"  Sample size: {sample_size}")
-            
-            size_results = {}
             
             # Test each method
             for method in available_methods:
                 logger.info(f"    Method: {method}")
                 
                 try:
-                    method_results = self._test_single_method(
+                    method_result = self._test_single_method(
                         strategy, beta, sample_size, method, original_df
                     )
-                    size_results[method] = method_results
+                    if method_result:
+                        config_results.append(method_result)
                     
                 except Exception as e:
                     logger.error(f"Testing failed for {method}: {e}")
-                    size_results[method] = {'error': str(e)}
-            
-            config_results[sample_size] = size_results
         
         return config_results
     
@@ -169,36 +164,82 @@ class DistributionTester:
         sample_size: int,
         method: str,
         original_df: pd.DataFrame
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Test a single sampling method."""
         
         # Load sampled data
         sampled_df = self._load_sampled_data(strategy, beta, sample_size, method)
         
         if sampled_df is None:
-            return {'error': 'Could not load sampled data'}
+            return None
         
-        # Run tests
-        results = {}
+        # Try to get the original indices of sampled points
+        sampled_indices = self._get_sampled_indices(strategy, beta, sample_size, method)
         
-        # 1. Gower distance test (for original features)
-        logger.debug("    Running Gower distance test...")
-        gower_results = self._run_gower_test(original_df, sampled_df)
-        results['gower'] = gower_results
-        
-        # 2. Multivariate latent space test (with enhanced model loading)
-        logger.debug("    Running latent space test...")
-        latent_results = self._run_latent_test(
+        # Get latent encodings for Wasserstein distance
+        z_original, z_sampled = self._get_latent_encodings(
             original_df, sampled_df, strategy, beta
         )
-        results['latent'] = latent_results
         
-        # 3. Feature-wise tests
-        logger.debug("    Running feature-wise tests...")
-        feature_results = self._run_feature_tests(original_df, sampled_df)
-        results['features'] = feature_results
+        if z_original is None or z_sampled is None:
+            logger.warning(f"Could not get latent encodings for {strategy}-{beta}-{method}")
+            return None
         
-        return results
+        # Calculate Wasserstein distance on latent space
+        wasserstein_dist = self._calculate_wasserstein_distance(z_original, z_sampled)
+        
+        # Run classifier-based 2-sample test on original data
+        classifier_results = self._run_classifier_test(original_df, sampled_df, sampled_indices)
+        
+        result = {
+            'strategy': strategy,
+            'beta': beta,
+            'method': method,
+            'sample_size': sample_size,
+            'n_original': len(z_original),
+            'n_sampled': len(z_sampled),
+            'wasserstein_distance': wasserstein_dist,
+            'balanced_accuracy': classifier_results['balanced_accuracy'],
+            'classifier_auc': classifier_results['auc'],
+            'classifier_cv_mean': classifier_results['cv_mean'],
+            'classifier_cv_std': classifier_results['cv_std'],
+            'representativeness_score': classifier_results['representativeness_score'],
+            'n_remaining_original': classifier_results['n_remaining_original'],
+            'n_representatives': classifier_results['n_representatives'],
+            'n_features_used': classifier_results['n_features']
+        }
+        
+        logger.debug(f"    Wasserstein: {wasserstein_dist:.4f}, "
+                    f"Balanced Acc: {classifier_results['balanced_accuracy']:.3f}, "
+                    f"Repr Score: {classifier_results['representativeness_score']:.3f}")
+        
+        return result
+    
+    def _get_sampled_indices(
+        self, 
+        strategy: str, 
+        beta: float, 
+        sample_size: int, 
+        method: str
+    ) -> Optional[List[int]]:
+        """Get the original indices of sampled points if available."""
+        indices_file = os.path.join(
+            self.config.paths.SAMPLES_DIR,
+            strategy,
+            f'beta_{beta}',
+            f'method_{method}',
+            f'samples_{sample_size}',
+            'selected_indices.npy'
+        )
+        
+        try:
+            if os.path.exists(indices_file):
+                indices = np.load(indices_file)
+                return indices.tolist()
+        except Exception as e:
+            logger.debug(f"Could not load indices file {indices_file}: {e}")
+        
+        return None
     
     def _load_sampled_data(
         self, 
@@ -223,254 +264,24 @@ class DistributionTester:
         
         return pd.read_csv(sampled_file)
     
-    def _run_gower_test(
-        self, 
-        original_df: pd.DataFrame, 
-        sampled_df: pd.DataFrame
-    ) -> Dict[str, Any]:
-        """Run Gower distance test for mixed-type features."""
-        try:
-            # Subsample for efficiency
-            if len(original_df) > self.max_samples:
-                original_sample = original_df.sample(self.max_samples, random_state=42)
-            else:
-                original_sample = original_df
-            
-            if len(sampled_df) > self.max_samples:
-                sampled_sample = sampled_df.sample(self.max_samples, random_state=42)
-            else:
-                sampled_sample = sampled_df
-            
-            # Find common columns
-            common_cols = self._find_common_columns(original_sample, sampled_sample)
-            
-            if not common_cols:
-                return {'error': 'No common columns found'}
-            
-            # Prepare data
-            original_data = original_sample[common_cols].dropna()
-            sampled_data = sampled_sample[common_cols].dropna()
-            
-            # Compute Gower distance
-            gower_distance = self._compute_gower_distance(
-                original_data, sampled_data
-            )
-            
-            # Permutation test
-            p_value = self._gower_permutation_test(
-                original_data, sampled_data, gower_distance
-            )
-            
-            return {
-                'distance': gower_distance,
-                'p_value': p_value,
-                'reject_h0': p_value < 0.05,
-                'n_original': len(original_data),
-                'n_sampled': len(sampled_data),
-                'n_features': len(common_cols)
-            }
-            
-        except Exception as e:
-            logger.error(f"Gower test failed: {e}")
-            return {'error': str(e)}
-    
-    def _run_latent_test(
-        self,
-        original_df: pd.DataFrame,
-        sampled_df: pd.DataFrame,
-        strategy: str,
-        beta: float
-    ) -> Dict[str, Any]:
-        """Run multivariate latent space test with enhanced model loading."""
-        try:
-            # Load VAE model and get latent encodings using enhanced loader
-            z_original, z_sampled = self._get_latent_encodings_enhanced(
-                original_df, sampled_df, strategy, beta
-            )
-            
-            if z_original is None or z_sampled is None:
-                return {'error': 'Could not get latent encodings'}
-            
-            # Subsample for efficiency
-            if len(z_original) > self.max_samples:
-                indices = np.random.choice(len(z_original), self.max_samples, replace=False)
-                z_original = z_original[indices]
-            
-            if len(z_sampled) > self.max_samples:
-                indices = np.random.choice(len(z_sampled), self.max_samples, replace=False)
-                z_sampled = z_sampled[indices]
-            
-            # Sliced Wasserstein distance test
-            wasserstein_results = self._sliced_wasserstein_test(z_original, z_sampled)
-            
-            return {
-                'sliced_wasserstein': wasserstein_results,
-                'latent_dim': z_original.shape[1],
-                'n_original': len(z_original),
-                'n_sampled': len(z_sampled)
-            }
-            
-        except Exception as e:
-            logger.error(f"Latent test failed: {e}")
-            return {'error': str(e)}
-    
-    def _run_feature_tests(
-        self,
-        original_df: pd.DataFrame,
-        sampled_df: pd.DataFrame
-    ) -> Dict[str, Any]:
-        """Run feature-wise statistical tests."""
-        try:
-            results = {}
-            
-            # Find common numerical columns
-            numerical_cols = [
-                col for col in self.config.data.NUMERICAL_COLS
-                if col in original_df.columns and col in sampled_df.columns
-            ]
-            
-            # Test numerical features
-            for col in numerical_cols:
-                try:
-                    original_values = original_df[col].dropna()
-                    sampled_values = sampled_df[col].dropna()
-                    
-                    if len(original_values) > 0 and len(sampled_values) > 0:
-                        # Kolmogorov-Smirnov test
-                        ks_stat, ks_p = stats.ks_2samp(original_values, sampled_values)
-                        
-                        # Mann-Whitney U test
-                        mw_stat, mw_p = stats.mannwhitneyu(
-                            original_values, sampled_values, alternative='two-sided'
-                        )
-                        
-                        results[col] = {
-                            'ks_statistic': ks_stat,
-                            'ks_p_value': ks_p,
-                            'mw_statistic': mw_stat,
-                            'mw_p_value': mw_p,
-                            'ks_reject': ks_p < 0.05,
-                            'mw_reject': mw_p < 0.05
-                        }
-                        
-                except Exception as e:
-                    results[col] = {'error': str(e)}
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Feature tests failed: {e}")
-            return {'error': str(e)}
-    
-    def _find_common_columns(
-        self, 
-        df1: pd.DataFrame, 
-        df2: pd.DataFrame
-    ) -> List[str]:
-        """Find common columns between two dataframes."""
-        # Use numerical and categorical columns from config
-        all_feature_cols = self.config.data.NUMERICAL_COLS + self.config.data.CATEGORICAL_COLS
-        
-        common_cols = [
-            col for col in all_feature_cols
-            if col in df1.columns and col in df2.columns
-        ]
-        
-        # If no config columns found, use numeric columns
-        if not common_cols:
-            common_cols = list(set(df1.select_dtypes(include=[np.number]).columns) & 
-                             set(df2.select_dtypes(include=[np.number]).columns))
-        
-        return common_cols
-    
-    def _compute_gower_distance(
-        self, 
-        data1: pd.DataFrame, 
-        data2: pd.DataFrame
-    ) -> float:
-        """Compute Gower distance between two datasets."""
-        # Simple implementation - for full implementation, use gower package
-        # Here we use a simplified version focusing on numerical features
-        
-        numerical_cols = data1.select_dtypes(include=[np.number]).columns
-        
-        if len(numerical_cols) == 0:
-            return 0.0
-        
-        # Subsample for efficiency
-        n_pairs = min(500, len(data1) * len(data2))  # Reduced for speed
-        
-        if n_pairs == len(data1) * len(data2):
-            # Small enough to compute all pairs
-            distances = []
-            for _, row1 in data1[numerical_cols].iterrows():
-                for _, row2 in data2[numerical_cols].iterrows():
-                    distance = np.mean(np.abs(row1 - row2) / (data1[numerical_cols].max() - data1[numerical_cols].min()))
-                    distances.append(distance)
-        else:
-            # Sample pairs
-            distances = []
-            for _ in range(n_pairs):
-                idx1 = np.random.randint(0, len(data1))
-                idx2 = np.random.randint(0, len(data2))
-                
-                row1 = data1[numerical_cols].iloc[idx1]
-                row2 = data2[numerical_cols].iloc[idx2]
-                
-                distance = np.mean(np.abs(row1 - row2) / (data1[numerical_cols].max() - data1[numerical_cols].min()))
-                distances.append(distance)
-        
-        return np.mean(distances)
-    
-    def _gower_permutation_test(
-        self,
-        data1: pd.DataFrame,
-        data2: pd.DataFrame,
-        observed_distance: float
-    ) -> float:
-        """Run permutation test for Gower distance."""
-        combined_data = pd.concat([data1, data2], ignore_index=True)
-        n1, n2 = len(data1), len(data2)
-        
-        permutation_distances = []
-        
-        for _ in range(self.n_permutations):
-            # Random permutation
-            shuffled = combined_data.sample(frac=1.0, random_state=None).reset_index(drop=True)
-            perm_data1 = shuffled.iloc[:n1]
-            perm_data2 = shuffled.iloc[n1:]
-            
-            perm_distance = self._compute_gower_distance(perm_data1, perm_data2)
-            permutation_distances.append(perm_distance)
-        
-        # Calculate p-value
-        p_value = np.mean(np.array(permutation_distances) >= observed_distance)
-        return max(p_value, 1e-10)  # Avoid exactly zero p-values
-    
-    def _get_latent_encodings_enhanced(
+    def _get_latent_encodings(
         self,
         original_df: pd.DataFrame,
         sampled_df: pd.DataFrame,
         strategy: str,
         beta: float
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """
-        Get latent encodings with enhanced model loading (same as sampling manager).
-        """
+        """Get latent encodings for original and sampled data."""
         try:
             from models.vae import VAE, get_latent_encoding
             
-            # Enhanced model loading with recovery
+            # Load model with recovery
             model_dir = os.path.join(self.config.paths.MODELS_DIR, strategy, f'beta_{beta}')
             model_path = os.path.join(model_dir, 'vae_model_final.pth')
-            
-            logger.debug(f"Looking for model: {model_path}")
             
             # Check if model exists, try recovery if not
             if not os.path.exists(model_path):
                 logger.warning(f"Final model not found: {model_path}")
-                logger.info("Attempting to recover from checkpoints...")
-                
                 try:
                     self._recover_final_model_from_checkpoint(model_dir)
                     if not os.path.exists(model_path):
@@ -478,69 +289,27 @@ class DistributionTester:
                     logger.info("Successfully recovered final model from checkpoint")
                 except Exception as e:
                     logger.error(f"Model recovery failed for {strategy}-{beta}: {e}")
-                    
-                    # Last resort: look for any available model
-                    alternative_paths = [
-                        os.path.join(model_dir, 'vae_model.pth'),
-                        os.path.join(model_dir, 'model.pth'),
-                        os.path.join(model_dir, 'checkpoint.pth')
-                    ]
-                    
-                    # Also check for checkpoint files
-                    checkpoint_files = glob.glob(os.path.join(model_dir, "checkpoint_epoch_*.pth"))
-                    if checkpoint_files:
-                        # Use the most recent checkpoint
-                        latest_checkpoint = max(checkpoint_files, key=os.path.getmtime)
-                        alternative_paths.insert(0, latest_checkpoint)
-                    
-                    model_path = None
-                    for alt_path in alternative_paths:
-                        if os.path.exists(alt_path):
-                            logger.info(f"Using alternative model: {alt_path}")
-                            model_path = alt_path
-                            break
-                    
-                    if model_path is None:
-                        logger.error(f"No model files found for {strategy}-{beta} in {model_dir}")
-                        return None, None
+                    return None, None
             
-            # Load model with enhanced error handling
-            try:
-                logger.debug(f"Loading model from: {model_path}")
-                checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
-                
-                # Validate and reconstruct checkpoint if needed
-                checkpoint = self._validate_and_reconstruct_checkpoint(checkpoint, strategy, beta)
-                
-            except Exception as e:
-                logger.error(f"Failed to load model from {model_path}: {e}")
-                return None, None
+            # Load model
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+            checkpoint = self._validate_and_reconstruct_checkpoint(checkpoint, strategy, beta)
             
-            # Create model instance with error handling
-            try:
-                # Handle different checkpoint formats
-                cat_dict = checkpoint.get('categorical_cardinality', {})
-                if isinstance(cat_dict, dict) and not cat_dict:
-                    # Load from preprocessing objects if empty
-                    logger.debug("Loading categorical info from preprocessing objects")
-                    cat_dict = self._load_categorical_info()
-                
-                model = VAE(
-                    input_dim=checkpoint['input_dim'],
-                    num_numerical=checkpoint['num_numerical'],
-                    hidden_dim=checkpoint.get('hidden_dim', self.config.model.HIDDEN_DIM),
-                    latent_dim=checkpoint.get('latent_dim', self.config.model.LATENT_DIM),
-                    cat_dict=cat_dict
-                ).to(self.device)
-                
-                model.load_state_dict(checkpoint['model_state_dict'])
-                model.eval()  # Set to evaluation mode
-                
-                logger.debug("Model loaded successfully")
-                
-            except Exception as e:
-                logger.error(f"Failed to create model instance: {e}")
-                return None, None
+            # Create model instance
+            cat_dict = checkpoint.get('categorical_cardinality', {})
+            if isinstance(cat_dict, dict) and not cat_dict:
+                cat_dict = self._load_categorical_info()
+            
+            model = VAE(
+                input_dim=checkpoint['input_dim'],
+                num_numerical=checkpoint['num_numerical'],
+                hidden_dim=checkpoint.get('hidden_dim', self.config.model.HIDDEN_DIM),
+                latent_dim=checkpoint.get('latent_dim', self.config.model.LATENT_DIM),
+                cat_dict=cat_dict
+            ).to(self.device)
+            
+            model.load_state_dict(checkpoint['model_state_dict'])
+            model.eval()
             
             # Load preprocessed data
             if not os.path.exists(self.config.paths.PREPROCESSED_FILE):
@@ -549,7 +318,7 @@ class DistributionTester:
             
             preprocessed_df = pd.read_csv(self.config.paths.PREPROCESSED_FILE)
             
-            # Get encodings for original data (subsample)
+            # Subsample for efficiency
             if len(original_df) > self.max_samples:
                 original_indices = np.random.choice(len(original_df), self.max_samples, replace=False)
                 original_subset = original_df.iloc[original_indices]
@@ -563,6 +332,7 @@ class DistributionTester:
                 logger.error("No valid indices for original data")
                 return None, None
             
+            # Get encodings for original data
             original_preprocessed = torch.FloatTensor(
                 preprocessed_df.iloc[valid_indices].values
             ).to(self.device)
@@ -570,7 +340,6 @@ class DistributionTester:
             
             # Get encodings for sampled data
             try:
-                # Try to map sampled indices to preprocessed data
                 if hasattr(sampled_df, 'index') and max(sampled_df.index) < len(preprocessed_df):
                     sampled_preprocessed = torch.FloatTensor(
                         preprocessed_df.iloc[sampled_df.index].values
@@ -597,6 +366,183 @@ class DistributionTester:
         except Exception as e:
             logger.error(f"Error getting latent encodings: {e}")
             return None, None
+    
+    def _calculate_wasserstein_distance(
+        self, 
+        z_original: np.ndarray, 
+        z_sampled: np.ndarray
+    ) -> float:
+        """
+        Calculate multidimensional Wasserstein distance.
+        Uses the average of 1D Wasserstein distances across dimensions.
+        """
+        try:
+            distances = []
+            for dim in range(z_original.shape[1]):
+                dist = wasserstein_distance(z_original[:, dim], z_sampled[:, dim])
+                distances.append(dist)
+            
+            return np.mean(distances)
+            
+        except Exception as e:
+            logger.error(f"Error calculating Wasserstein distance: {e}")
+            return float('inf')
+    
+    def _run_classifier_test(
+        self, 
+        original_df: pd.DataFrame,
+        sampled_df: pd.DataFrame,
+        sampled_indices: Optional[List[int]] = None
+    ) -> Dict[str, float]:
+        """
+        Run classifier-based 2-sample test on original data.
+        
+        Compares representative set vs remaining original data (excluding representatives).
+        Lower balanced accuracy = better representativeness (classifier can't distinguish)
+        Higher balanced accuracy = poor representativeness (classifier can easily distinguish)
+        """
+        try:
+            from sklearn.metrics import balanced_accuracy_score
+            
+            # Get common numerical columns for classification
+            common_cols = self._find_common_columns(original_df, sampled_df)
+            if not common_cols:
+                logger.warning("No common columns found for classifier test")
+                return self._default_classifier_results()
+            
+            # Prepare representative set data
+            representative_data = sampled_df[common_cols].dropna()
+            
+            # Prepare remaining original data (excluding representatives)
+            if sampled_indices is not None:
+                # Remove representatives from original data
+                remaining_indices = [i for i in range(len(original_df)) if i not in sampled_indices]
+                remaining_original_data = original_df.iloc[remaining_indices][common_cols].dropna()
+            else:
+                # Fallback: use all original data if indices not available
+                remaining_original_data = original_df[common_cols].dropna()
+                logger.warning("Representative indices not available, using all original data")
+            
+            if len(representative_data) == 0 or len(remaining_original_data) == 0:
+                logger.warning("Empty datasets for classifier test")
+                return self._default_classifier_results()
+            
+            # Subsample if datasets are too large
+            max_samples_per_class = self.max_samples // 2
+            
+            if len(representative_data) > max_samples_per_class:
+                representative_data = representative_data.sample(max_samples_per_class, random_state=42)
+            
+            if len(remaining_original_data) > max_samples_per_class:
+                remaining_original_data = remaining_original_data.sample(max_samples_per_class, random_state=42)
+            
+            # Create labels (0 = remaining original, 1 = representative)
+            X = pd.concat([remaining_original_data, representative_data], ignore_index=True)
+            y = np.hstack([
+                np.zeros(len(remaining_original_data)), 
+                np.ones(len(representative_data))
+            ])
+            
+            # Convert to numpy and handle any remaining NaN values
+            X_values = X.values
+            if np.any(np.isnan(X_values)):
+                # Simple imputation with median
+                from sklearn.impute import SimpleImputer
+                imputer = SimpleImputer(strategy='median')
+                X_values = imputer.fit_transform(X_values)
+            
+            # Standardize features
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_values)
+            
+            # Split for testing
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_scaled, y, test_size=0.3, random_state=42, stratify=y
+            )
+            
+            # Train classifier
+            clf = RandomForestClassifier(
+                n_estimators=100, 
+                random_state=42, 
+                max_depth=10,  # Limit depth to prevent overfitting
+                min_samples_split=10,
+                min_samples_leaf=5,
+                class_weight='balanced'  # Handle class imbalance
+            )
+            clf.fit(X_train, y_train)
+            
+            # Evaluate on test set
+            y_pred = clf.predict(X_test)
+            y_pred_proba = clf.predict_proba(X_test)[:, 1]
+            
+            # Use balanced accuracy instead of regular accuracy
+            balanced_acc = balanced_accuracy_score(y_test, y_pred)
+            
+            try:
+                auc = roc_auc_score(y_test, y_pred_proba)
+            except:
+                auc = 0.5  # Default to random classifier performance
+            
+            # Cross-validation for more robust estimate using balanced accuracy
+            cv_scores = cross_val_score(clf, X_scaled, y, cv=5, scoring='balanced_accuracy')
+            cv_mean = np.mean(cv_scores)
+            cv_std = np.std(cv_scores)
+            
+            # Representativeness score: 1.0 - (balanced_accuracy - 0.5) * 2
+            # Perfect representation = 0.5 balanced accuracy -> score = 1.0
+            # Poor representation = 1.0 balanced accuracy -> score = 0.0
+            representativeness_score = max(0.0, 1.0 - (cv_mean - 0.5) * 2)
+            
+            logger.debug(f"Classifier test: Remaining original: {len(remaining_original_data)}, "
+                        f"Representatives: {len(representative_data)}, "
+                        f"Balanced accuracy: {balanced_acc:.3f}")
+            
+            return {
+                'balanced_accuracy': balanced_acc,
+                'accuracy': balanced_acc,  # Keep for backward compatibility
+                'auc': auc,
+                'cv_mean': cv_mean,
+                'cv_std': cv_std,
+                'representativeness_score': representativeness_score,
+                'n_remaining_original': len(remaining_original_data),
+                'n_representatives': len(representative_data),
+                'n_features': len(common_cols)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in classifier test: {e}")
+            return self._default_classifier_results()
+    
+    def _find_common_columns(self, df1: pd.DataFrame, df2: pd.DataFrame) -> List[str]:
+        """Find common numerical columns between two dataframes."""
+        # Use numerical and categorical columns from config
+        all_feature_cols = self.config.data.NUMERICAL_COLS + self.config.data.CATEGORICAL_COLS
+        
+        common_cols = [
+            col for col in all_feature_cols
+            if col in df1.columns and col in df2.columns
+        ]
+        
+        # If no config columns found, use numeric columns
+        if not common_cols:
+            common_cols = list(set(df1.select_dtypes(include=[np.number]).columns) & 
+                             set(df2.select_dtypes(include=[np.number]).columns))
+        
+        return common_cols
+    
+    def _default_classifier_results(self) -> Dict[str, float]:
+        """Return default classifier results for error cases."""
+        return {
+            'balanced_accuracy': 1.0,  # Worst case
+            'accuracy': 1.0,
+            'auc': 1.0,
+            'cv_mean': 1.0,
+            'cv_std': 0.0,
+            'representativeness_score': 0.0,
+            'n_remaining_original': 0,
+            'n_representatives': 0,
+            'n_features': 0
+        }
     
     def _validate_and_reconstruct_checkpoint(self, checkpoint: dict, strategy: str, beta: float) -> dict:
         """Validate checkpoint and reconstruct missing information."""
@@ -631,7 +577,6 @@ class DistributionTester:
         
         # Set defaults for missing values
         if 'input_dim' not in checkpoint:
-            # Try to infer from model state dict
             try:
                 first_layer = None
                 for key in checkpoint['model_state_dict'].keys():
@@ -643,7 +588,7 @@ class DistributionTester:
                     checkpoint['input_dim'] = first_layer.shape[1]
                     logger.info(f"Inferred input_dim: {checkpoint['input_dim']}")
                 else:
-                    checkpoint['input_dim'] = self.config.model.HIDDEN_DIM * 2  # Fallback
+                    checkpoint['input_dim'] = self.config.model.HIDDEN_DIM * 2
                     
             except Exception:
                 checkpoint['input_dim'] = self.config.model.HIDDEN_DIM * 2
@@ -673,7 +618,6 @@ class DistributionTester:
     def _recover_final_model_from_checkpoint(self, model_dir: str) -> None:
         """Recover final model by copying the best checkpoint."""
         
-        # Find all checkpoint files
         checkpoint_pattern = os.path.join(model_dir, "checkpoint_epoch_*_val_loss_*.pth")
         checkpoint_files = glob.glob(checkpoint_pattern)
         
@@ -682,26 +626,22 @@ class DistributionTester:
         
         logger.info(f"Found {len(checkpoint_files)} checkpoint files")
         
-        # Extract validation loss and find the best one
         def get_val_loss(filepath):
             filename = os.path.basename(filepath)
             match = re.search(r'val_loss_(\d+\.?\d*)', filename)
             return float(match.group(1)) if match else float('inf')
         
-        # Find best checkpoint
         checkpoint_losses = [(f, get_val_loss(f)) for f in checkpoint_files]
         valid_checkpoints = [(f, loss) for f, loss in checkpoint_losses if loss != float('inf')]
         
         if not valid_checkpoints:
-            raise Exception("No valid checkpoints found (could not parse validation losses)")
+            raise Exception("No valid checkpoints found")
         
         best_checkpoint, best_loss = min(valid_checkpoints, key=lambda x: x[1])
         
-        # Copy as final model
         final_model_path = os.path.join(model_dir, 'vae_model_final.pth')
         shutil.copy2(best_checkpoint, final_model_path)
         
-        # Verify copy
         if not os.path.exists(final_model_path):
             raise Exception("Failed to copy checkpoint as final model")
         
@@ -709,185 +649,455 @@ class DistributionTester:
         logger.info(f"Recovered: {os.path.basename(best_checkpoint)} → vae_model_final.pth")
         logger.info(f"   Validation loss: {best_loss:.4f}, Size: {file_size:,} bytes")
     
-    def _sliced_wasserstein_test(
-        self, 
-        z_original: np.ndarray, 
-        z_sampled: np.ndarray
-    ) -> Dict[str, Any]:
-        """Compute sliced Wasserstein distance and perform permutation test."""
+    def _create_rankings_and_summary(self, all_results: List[Dict[str, Any]]) -> None:
+        """Create rankings and summary CSV files."""
         try:
-            # Compute observed sliced Wasserstein distance
-            observed_distance = self._sliced_wasserstein_distance(z_original, z_sampled)
+            df = pd.DataFrame(all_results)
             
-            # Permutation test
-            combined = np.vstack([z_original, z_sampled])
-            n1, n2 = len(z_original), len(z_sampled)
+            # Save detailed results
+            results_path = os.path.join(self.config.paths.TESTS_DIR, 'detailed_test_results.csv')
+            os.makedirs(self.config.paths.TESTS_DIR, exist_ok=True)
+            df.to_csv(results_path, index=False)
+            logger.info(f"📊 Detailed results saved: {results_path}")
             
-            permutation_distances = []
-            for _ in range(self.n_permutations):
-                # Random permutation
-                indices = np.random.permutation(len(combined))
-                perm1 = combined[indices[:n1]]
-                perm2 = combined[indices[n1:]]
-                
-                perm_distance = self._sliced_wasserstein_distance(perm1, perm2)
-                permutation_distances.append(perm_distance)
+            # Create rankings by Wasserstein distance (lower is better)
+            rankings_wasserstein = df.groupby(['method', 'sample_size']).agg({
+                'wasserstein_distance': 'mean',
+                'strategy': 'count'  # Count as number of experiments
+            }).rename(columns={'strategy': 'n_experiments'}).reset_index()
             
-            # Calculate p-value
-            p_value = np.mean(np.array(permutation_distances) >= observed_distance)
-            p_value = max(p_value, 1e-10)  # Avoid exactly zero p-values
+            rankings_wasserstein = rankings_wasserstein.sort_values('wasserstein_distance')
+            rankings_wasserstein['wasserstein_rank'] = range(1, len(rankings_wasserstein) + 1)
             
-            return {
-                'distance': observed_distance,
-                'p_value': p_value,
-                'reject_h0': p_value < 0.05,
-                'n_permutations': self.n_permutations
-            }
+            # Create rankings by representativeness score (higher is better)
+            rankings_repr = df.groupby(['method', 'sample_size']).agg({
+                'representativeness_score': 'mean',
+                'balanced_accuracy': 'mean',
+                'strategy': 'count'
+            }).rename(columns={'strategy': 'n_experiments'}).reset_index()
+            
+            rankings_repr = rankings_repr.sort_values('representativeness_score', ascending=False)
+            rankings_repr['representativeness_rank'] = range(1, len(rankings_repr) + 1)
+            
+            # Combine rankings
+            combined_rankings = pd.merge(
+                rankings_wasserstein[['method', 'sample_size', 'wasserstein_distance', 'wasserstein_rank']],
+                rankings_repr[['method', 'sample_size', 'representativeness_score', 'balanced_accuracy', 'representativeness_rank']],
+                on=['method', 'sample_size']
+            )
+            
+            # Calculate overall score (lower is better)
+            combined_rankings['overall_score'] = (
+                combined_rankings['wasserstein_rank'] + combined_rankings['representativeness_rank']
+            ) / 2
+            combined_rankings = combined_rankings.sort_values('overall_score')
+            combined_rankings['overall_rank'] = range(1, len(combined_rankings) + 1)
+            
+            # Save rankings
+            rankings_path = os.path.join(self.config.paths.TESTS_DIR, 'method_rankings.csv')
+            combined_rankings.to_csv(rankings_path, index=False)
+            logger.info(f"📊 Method rankings saved: {rankings_path}")
+            
+            # Create summary statistics
+            summary_stats = df.groupby('method').agg({
+                'wasserstein_distance': ['mean', 'std', 'min', 'max'],
+                'representativeness_score': ['mean', 'std', 'min', 'max'],
+                'balanced_accuracy': ['mean', 'std'],
+                'strategy': 'count'
+            }).round(4)
+            
+            summary_stats.columns = ['_'.join(col).strip() for col in summary_stats.columns]
+            summary_stats = summary_stats.rename(columns={'strategy_count': 'total_experiments'})
+            summary_stats = summary_stats.reset_index()
+            
+            summary_path = os.path.join(self.config.paths.TESTS_DIR, 'method_summary_statistics.csv')
+            summary_stats.to_csv(summary_path, index=False)
+            logger.info(f"📊 Summary statistics saved: {summary_path}")
+            
+            # Print top rankings
+            logger.info("\n🏆 TOP 5 METHODS BY OVERALL RANKING:")
+            top_5 = combined_rankings.head(5)
+            for _, row in top_5.iterrows():
+                logger.info(f"{row['overall_rank']:2d}. {row['method']} (n={row['sample_size']}) - "
+                          f"Wasserstein: {row['wasserstein_distance']:.4f}, "
+                          f"Repr.Score: {row['representativeness_score']:.3f}")
+            
+            logger.info(f"\n📁 All results saved to: {self.config.paths.TESTS_DIR}")
             
         except Exception as e:
-            logger.error(f"Sliced Wasserstein test failed: {e}")
-            return {'error': str(e)}
+            logger.error(f"Could not create rankings and summary: {e}")
     
-    def _sliced_wasserstein_distance(
-        self, 
-        X: np.ndarray, 
-        Y: np.ndarray, 
-        n_projections: int = 20  # Reduced for speed
-    ) -> float:
-        """Compute sliced Wasserstein distance."""
-        d = X.shape[1]
-        distances = []
-        
-        for _ in range(n_projections):
-            # Random unit vector
-            theta = np.random.randn(d)
-            theta = theta / np.linalg.norm(theta)
-            
-            # Project data
-            X_proj = np.dot(X, theta)
-            Y_proj = np.dot(Y, theta)
-            
-            # Compute 1D Wasserstein distance
-            w_dist = stats.wasserstein_distance(X_proj, Y_proj)
-            distances.append(w_dist)
-        
-        return np.mean(distances)
-    
-    def _create_overall_test_summary(self, all_results: Dict[str, Any]) -> None:
-        """Create overall summary of test results."""
+    def _create_comparison_plots(self, all_results: List[Dict[str, Any]]) -> None:
+        """Create comparison plots for each sample size."""
         try:
-            summary_data = []
+            df = pd.DataFrame(all_results)
             
-            for strategy in all_results:
-                for beta in all_results[strategy]:
-                    strategy_results = all_results[strategy][beta]
-                    
-                    if 'error' in strategy_results:
-                        summary_data.append({
-                            'strategy': strategy,
-                            'beta': beta,
-                            'sample_size': 'all',
-                            'method': 'all',
-                            'test_type': 'all',
-                            'success': False,
-                            'error': strategy_results['error']
-                        })
-                        continue
-                    
-                    for sample_size in strategy_results:
-                        for method in strategy_results[sample_size]:
-                            method_results = strategy_results[sample_size][method]
-                            
-                            if 'error' in method_results:
-                                summary_data.append({
-                                    'strategy': strategy,
-                                    'beta': beta,
-                                    'sample_size': sample_size,
-                                    'method': method,
-                                    'test_type': 'all',
-                                    'success': False,
-                                    'error': method_results['error']
-                                })
-                                continue
-                            
-                            # Gower test results
-                            if 'gower' in method_results and 'error' not in method_results['gower']:
-                                gower = method_results['gower']
-                                summary_data.append({
-                                    'strategy': strategy,
-                                    'beta': beta,
-                                    'sample_size': sample_size,
-                                    'method': method,
-                                    'test_type': 'gower',
-                                    'success': True,
-                                    'distance': gower.get('distance', np.nan),
-                                    'p_value': gower.get('p_value', np.nan),
-                                    'reject_h0': gower.get('reject_h0', False)
-                                })
-                            
-                            # Latent test results
-                            if 'latent' in method_results and 'error' not in method_results['latent']:
-                                latent = method_results['latent']
-                                if 'sliced_wasserstein' in latent and 'error' not in latent['sliced_wasserstein']:
-                                    sw = latent['sliced_wasserstein']
-                                    summary_data.append({
-                                        'strategy': strategy,
-                                        'beta': beta,
-                                        'sample_size': sample_size,
-                                        'method': method,
-                                        'test_type': 'sliced_wasserstein',
-                                        'success': True,
-                                        'distance': sw.get('distance', np.nan),
-                                        'p_value': sw.get('p_value', np.nan),
-                                        'reject_h0': sw.get('reject_h0', False)
-                                    })
+            if len(df) == 0:
+                logger.warning("No data available for plotting")
+                return
             
-            # Save summary
-            if summary_data:
-                summary_df = pd.DataFrame(summary_data)
-                
-                # Ensure output directory exists
-                os.makedirs(self.config.paths.TESTS_DIR, exist_ok=True)
-                
-                summary_path = os.path.join(self.config.paths.TESTS_DIR, 'distribution_test_summary.csv')
-                summary_df.to_csv(summary_path, index=False)
-                
-                logger.info(f"📊 Distribution test summary saved: {summary_path}")
-                
-                # Log summary statistics
-                total_tests = len(summary_df)
-                successful_tests = len(summary_df[summary_df['success'] == True])
-                failed_tests = total_tests - successful_tests
-                
-                logger.info(f"Total tests: {total_tests}")
-                logger.info(f"Successful: {successful_tests}")
-                logger.info(f"Failed: {failed_tests}")
-                
-                if successful_tests > 0:
-                    # Rejection rates by test type
-                    for test_type in summary_df['test_type'].unique():
-                        if test_type != 'all':
-                            test_data = summary_df[
-                                (summary_df['test_type'] == test_type) & 
-                                (summary_df['success'] == True)
-                            ]
-                            if len(test_data) > 0:
-                                rejection_rate = test_data['reject_h0'].mean() * 100
-                                logger.info(f"{test_type} rejection rate: {rejection_rate:.1f}%")
-            else:
-                logger.warning("No test results to summarize")
-        
+            # Set up plotting style
+            plt.style.use('default')
+            sns.set_palette("husl")
+            
+            # Create plots for each sample size
+            sample_sizes = sorted(df['sample_size'].unique())
+            
+            for sample_size in sample_sizes:
+                logger.info(f"Creating comparison plots for sample size {sample_size}")
+                self._create_sample_size_plots(df, sample_size)
+            
+            # Create overall summary plots
+            self._create_overall_summary_plots(df)
+            
+            logger.info(f"📊 Comparison plots saved to: {self.config.paths.TESTS_DIR}")
+            
         except Exception as e:
-            logger.error(f"Could not create test summary: {e}")
-
-    def _get_latent_encodings(
-        self,
-        original_df: pd.DataFrame,
-        sampled_df: pd.DataFrame,
-        strategy: str,
-        beta: float
-    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """
-        Legacy method - redirects to enhanced version.
-        """
-        return self._get_latent_encodings_enhanced(original_df, sampled_df, strategy, beta)
+            logger.error(f"Could not create comparison plots: {e}")
+    
+    def _create_sample_size_plots(self, df: pd.DataFrame, sample_size: int) -> None:
+        """Create detailed plots for a specific sample size."""
+        try:
+            # Filter data for this sample size
+            df_size = df[df['sample_size'] == sample_size].copy()
+            
+            if len(df_size) == 0:
+                return
+            
+            # Create figure with subplots
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            fig.suptitle(f'Method Comparison - Sample Size {sample_size}', fontsize=16, fontweight='bold')
+            
+            # Plot 1: Wasserstein Distance by Strategy and Beta
+            self._plot_wasserstein_by_strategy_beta(df_size, axes[0, 0])
+            
+            # Plot 2: Balanced Accuracy with Error Bars by Method
+            self._plot_accuracy_with_errors(df_size, axes[0, 1])
+            
+            # Plot 3: Representativeness Score by Method
+            self._plot_representativeness_by_method(df_size, axes[1, 0])
+            
+            # Plot 4: Strategy vs Beta Heatmap (Wasserstein)
+            self._plot_strategy_beta_heatmap(df_size, axes[1, 1])
+            
+            plt.tight_layout()
+            
+            # Save plot
+            plot_path = os.path.join(self.config.paths.TESTS_DIR, f'comparison_sample_size_{sample_size}.png')
+            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Could not create plots for sample size {sample_size}: {e}")
+    
+    def _plot_wasserstein_by_strategy_beta(self, df: pd.DataFrame, ax) -> None:
+        """Plot Wasserstein distance by strategy and beta values."""
+        try:
+            # Group by method, strategy, and beta
+            plot_data = df.groupby(['method', 'strategy', 'beta']).agg({
+                'wasserstein_distance': 'mean'
+            }).reset_index()
+            
+            # Create a bar plot
+            methods = plot_data['method'].unique()
+            strategies = plot_data['strategy'].unique()
+            betas = sorted(plot_data['beta'].unique())
+            
+            x_pos = np.arange(len(methods))
+            width = 0.8 / (len(strategies) * len(betas))
+            
+            colors = plt.cm.Set3(np.linspace(0, 1, len(strategies) * len(betas)))
+            
+            for i, strategy in enumerate(strategies):
+                for j, beta in enumerate(betas):
+                    subset = plot_data[(plot_data['strategy'] == strategy) & (plot_data['beta'] == beta)]
+                    if len(subset) > 0:
+                        # Align data with methods
+                        y_values = []
+                        for method in methods:
+                            method_data = subset[subset['method'] == method]
+                            if len(method_data) > 0:
+                                y_values.append(method_data['wasserstein_distance'].iloc[0])
+                            else:
+                                y_values.append(0)
+                        
+                        offset = (i * len(betas) + j) * width - 0.4 + width/2
+                        color_idx = i * len(betas) + j
+                        
+                        ax.bar(x_pos + offset, y_values, width, 
+                              label=f'{strategy}-β{beta}', 
+                              color=colors[color_idx], alpha=0.7)
+            
+            ax.set_xlabel('Sampling Method')
+            ax.set_ylabel('Wasserstein Distance')
+            ax.set_title('Wasserstein Distance by Strategy & Beta')
+            ax.set_xticks(x_pos)
+            ax.set_xticklabels(methods, rotation=45, ha='right')
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+            ax.grid(True, alpha=0.3)
+            
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error creating plot:\n{str(e)}', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Wasserstein Distance by Strategy & Beta (Error)')
+    
+    def _plot_accuracy_with_errors(self, df: pd.DataFrame, ax) -> None:
+        """Plot balanced accuracy with error bars (boxplot style)."""
+        try:
+            # Group by method to get mean and std
+            accuracy_stats = df.groupby('method').agg({
+                'balanced_accuracy': ['mean', 'std', 'count'],
+                'classifier_cv_std': 'mean'  # Use cross-validation std as error
+            }).round(4)
+            
+            # Flatten column names
+            accuracy_stats.columns = ['_'.join(col).strip() for col in accuracy_stats.columns]
+            accuracy_stats = accuracy_stats.reset_index()
+            
+            methods = accuracy_stats['method']
+            means = accuracy_stats['balanced_accuracy_mean']
+            stds = accuracy_stats['classifier_cv_std_mean']  # Use CV std as error bars
+            
+            # Create bar plot with error bars
+            bars = ax.bar(range(len(methods)), means, yerr=stds, 
+                         capsize=5, alpha=0.7, color='skyblue', edgecolor='navy')
+            
+            # Add value labels on bars
+            for i, (bar, mean_val, std_val) in enumerate(zip(bars, means, stds)):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + std_val + 0.01,
+                       f'{mean_val:.3f}±{std_val:.3f}',
+                       ha='center', va='bottom', fontsize=8)
+            
+            ax.set_xlabel('Sampling Method')
+            ax.set_ylabel('Balanced Accuracy')
+            ax.set_title('Balanced Accuracy ± Std (Lower is Better)')
+            ax.set_xticks(range(len(methods)))
+            ax.set_xticklabels(methods, rotation=45, ha='right')
+            ax.grid(True, alpha=0.3)
+            
+            # Add reference line at 0.5 (perfect performance)
+            ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.7, label='Perfect (0.5)')
+            ax.legend()
+            
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error creating plot:\n{str(e)}', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Balanced Accuracy ± Std (Error)')
+    
+    def _plot_representativeness_by_method(self, df: pd.DataFrame, ax) -> None:
+        """Plot representativeness scores by method with individual points."""
+        try:
+            # Create violin plot or box plot
+            methods = df['method'].unique()
+            data_for_plot = [df[df['method'] == method]['representativeness_score'].values 
+                           for method in methods]
+            
+            # Create violin plot
+            parts = ax.violinplot(data_for_plot, range(1, len(methods) + 1), 
+                                 showmeans=True, showmedians=True)
+            
+            # Customize violin plot
+            for pc in parts['bodies']:
+                pc.set_facecolor('lightcoral')
+                pc.set_alpha(0.7)
+            
+            # Add individual points
+            for i, method in enumerate(methods):
+                method_data = df[df['method'] == method]['representativeness_score']
+                y_positions = np.random.normal(i + 1, 0.04, len(method_data))
+                ax.scatter(y_positions, method_data, alpha=0.6, s=20, color='darkred')
+            
+            ax.set_xlabel('Sampling Method')
+            ax.set_ylabel('Representativeness Score')
+            ax.set_title('Representativeness Score Distribution (Higher is Better)')
+            ax.set_xticks(range(1, len(methods) + 1))
+            ax.set_xticklabels(methods, rotation=45, ha='right')
+            ax.grid(True, alpha=0.3)
+            
+            # Add reference line at 1.0 (perfect performance)
+            ax.axhline(y=1.0, color='green', linestyle='--', alpha=0.7, label='Perfect (1.0)')
+            ax.legend()
+            
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error creating plot:\n{str(e)}', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Representativeness Score Distribution (Error)')
+    
+    def _plot_strategy_beta_heatmap(self, df: pd.DataFrame, ax) -> None:
+        """Plot heatmap of strategy vs beta values for Wasserstein distance."""
+        try:
+            # Create pivot table for heatmap
+            heatmap_data = df.groupby(['strategy', 'beta']).agg({
+                'wasserstein_distance': 'mean'
+            }).reset_index()
+            
+            if len(heatmap_data) == 0:
+                ax.text(0.5, 0.5, 'No data for heatmap', ha='center', va='center', transform=ax.transAxes)
+                ax.set_title('Strategy vs Beta Heatmap (No Data)')
+                return
+            
+            pivot_table = heatmap_data.pivot(index='strategy', columns='beta', values='wasserstein_distance')
+            
+            # Create heatmap
+            sns.heatmap(pivot_table, annot=True, fmt='.4f', cmap='YlOrRd', 
+                       ax=ax, cbar_kws={'label': 'Wasserstein Distance'})
+            
+            ax.set_title('Strategy vs Beta: Wasserstein Distance')
+            ax.set_xlabel('Beta Value')
+            ax.set_ylabel('Annealing Strategy')
+            
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error creating heatmap:\n{str(e)}', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Strategy vs Beta Heatmap (Error)')
+    
+    def _create_overall_summary_plots(self, df: pd.DataFrame) -> None:
+        """Create overall summary plots across all sample sizes."""
+        try:
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            fig.suptitle('Overall Method Comparison Across All Sample Sizes', fontsize=16, fontweight='bold')
+            
+            # Plot 1: Wasserstein distance by sample size and method
+            self._plot_wasserstein_by_sample_size(df, axes[0, 0])
+            
+            # Plot 2: Accuracy trends by sample size
+            self._plot_accuracy_trends(df, axes[0, 1])
+            
+            # Plot 3: Method performance correlation
+            self._plot_performance_correlation(df, axes[1, 0])
+            
+            # Plot 4: Overall rankings comparison
+            self._plot_overall_rankings(df, axes[1, 1])
+            
+            plt.tight_layout()
+            
+            # Save plot
+            plot_path = os.path.join(self.config.paths.TESTS_DIR, 'overall_comparison_plots.png')
+            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Could not create overall summary plots: {e}")
+    
+    def _plot_wasserstein_by_sample_size(self, df: pd.DataFrame, ax) -> None:
+        """Plot Wasserstein distance trends by sample size."""
+        try:
+            methods = df['method'].unique()
+            sample_sizes = sorted(df['sample_size'].unique())
+            
+            for method in methods:
+                method_data = df[df['method'] == method]
+                size_means = []
+                size_stds = []
+                
+                for size in sample_sizes:
+                    size_data = method_data[method_data['sample_size'] == size]['wasserstein_distance']
+                    if len(size_data) > 0:
+                        size_means.append(size_data.mean())
+                        size_stds.append(size_data.std() if len(size_data) > 1 else 0)
+                    else:
+                        size_means.append(np.nan)
+                        size_stds.append(0)
+                
+                ax.errorbar(sample_sizes, size_means, yerr=size_stds, 
+                           label=method, marker='o', capsize=3)
+            
+            ax.set_xlabel('Sample Size')
+            ax.set_ylabel('Wasserstein Distance')
+            ax.set_title('Wasserstein Distance by Sample Size')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error: {str(e)}', ha='center', va='center', transform=ax.transAxes)
+    
+    def _plot_accuracy_trends(self, df: pd.DataFrame, ax) -> None:
+        """Plot balanced accuracy trends by sample size."""
+        try:
+            methods = df['method'].unique()
+            sample_sizes = sorted(df['sample_size'].unique())
+            
+            for method in methods:
+                method_data = df[df['method'] == method]
+                size_means = []
+                size_stds = []
+                
+                for size in sample_sizes:
+                    size_data = method_data[method_data['sample_size'] == size]['balanced_accuracy']
+                    if len(size_data) > 0:
+                        size_means.append(size_data.mean())
+                        size_stds.append(size_data.std() if len(size_data) > 1 else 0)
+                    else:
+                        size_means.append(np.nan)
+                        size_stds.append(0)
+                
+                ax.errorbar(sample_sizes, size_means, yerr=size_stds, 
+                           label=method, marker='s', capsize=3)
+            
+            ax.set_xlabel('Sample Size')
+            ax.set_ylabel('Balanced Accuracy')
+            ax.set_title('Balanced Accuracy by Sample Size')
+            ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.7, label='Perfect (0.5)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error: {str(e)}', ha='center', va='center', transform=ax.transAxes)
+    
+    def _plot_performance_correlation(self, df: pd.DataFrame, ax) -> None:
+        """Plot correlation between Wasserstein distance and representativeness score."""
+        try:
+            methods = df['method'].unique()
+            colors = plt.cm.Set3(np.linspace(0, 1, len(methods)))
+            
+            for i, method in enumerate(methods):
+                method_data = df[df['method'] == method]
+                ax.scatter(method_data['wasserstein_distance'], 
+                          method_data['representativeness_score'],
+                          label=method, alpha=0.7, color=colors[i], s=50)
+            
+            ax.set_xlabel('Wasserstein Distance')
+            ax.set_ylabel('Representativeness Score')
+            ax.set_title('Performance Correlation\n(Bottom-right is best)')
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax.grid(True, alpha=0.3)
+            
+            # Add quadrant lines
+            ax.axhline(y=df['representativeness_score'].median(), color='gray', linestyle=':', alpha=0.5)
+            ax.axvline(x=df['wasserstein_distance'].median(), color='gray', linestyle=':', alpha=0.5)
+            
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error: {str(e)}', ha='center', va='center', transform=ax.transAxes)
+    
+    def _plot_overall_rankings(self, df: pd.DataFrame, ax) -> None:
+        """Plot overall method rankings."""
+        try:
+            # Calculate simple overall scores
+            method_scores = df.groupby('method').agg({
+                'wasserstein_distance': 'mean',
+                'representativeness_score': 'mean'
+            }).reset_index()
+            
+            # Normalize scores (lower Wasserstein is better, higher representativeness is better)
+            method_scores['wasserstein_rank'] = method_scores['wasserstein_distance'].rank()
+            method_scores['repr_rank'] = method_scores['representativeness_score'].rank(ascending=False)
+            method_scores['overall_score'] = (method_scores['wasserstein_rank'] + method_scores['repr_rank']) / 2
+            method_scores = method_scores.sort_values('overall_score')
+            
+            # Create horizontal bar plot
+            y_pos = np.arange(len(method_scores))
+            ax.barh(y_pos, method_scores['overall_score'], alpha=0.7, color='lightblue')
+            
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(method_scores['method'])
+            ax.set_xlabel('Overall Score (Lower is Better)')
+            ax.set_title('Overall Method Rankings')
+            ax.grid(True, alpha=0.3)
+            
+            # Add score labels
+            for i, score in enumerate(method_scores['overall_score']):
+                ax.text(score + 0.05, i, f'{score:.2f}', va='center')
+            
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error: {str(e)}', ha='center', va='center', transform=ax.transAxes)

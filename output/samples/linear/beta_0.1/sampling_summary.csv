@@ -1,4 +1,4 @@
 method,sample_size,n_selected,strategy,beta,success
-equiprobable,100,100,linear,0.1,True
-equiprobable,400,400,linear,0.1,True
-equiprobable,900,899,linear,0.1,True
+cluster_based,100,100,linear,0.1,True
+cluster_based,400,400,linear,0.1,True
+cluster_based,900,900,linear,0.1,True

@@ -362,16 +362,28 @@ class VAEPipeline:
             }
     
     def _run_test(self, **kwargs) -> None:
-        """Run distribution testing stage."""
-        from evaluation.testing import DistributionTester
+        """Run simplified testing stage with Wasserstein distance ranking."""
+        from evaluation.testing import SimplifiedTester
         
         try:
-            tester = DistributionTester(self.config)
+            tester = SimplifiedTester(self.config)
             test_results = tester.run_all_tests()
             self.results['testing'] = test_results
-            logger.info("🧪 Completed distribution testing")
+            
+            # Log summary
+            if 'results' in test_results and test_results['results']:
+                total_tests = test_results.get('total_tests', 0)
+                logger.info(f"🧪 Completed simplified testing: {total_tests} method evaluations")
+                logger.info("📊 Results include:")
+                logger.info("  - Wasserstein distance rankings")
+                logger.info("  - Classifier-based representativeness scores")
+                logger.info("  - Combined overall rankings")
+            else:
+                logger.warning("No test results generated")
+                
         except Exception as e:
-            logger.warning(f"Testing failed: {e}. Continuing...")
+            logger.error(f"Testing failed: {e}")
+            self.results['testing'] = {'error': str(e)}
 
 def main():
     """Main entry point with simplified argument parsing."""

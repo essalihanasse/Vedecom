@@ -1,0 +1,3 @@
+method,wasserstein_distance_mean,wasserstein_distance_std,wasserstein_distance_min,wasserstein_distance_max,representativeness_score_mean,representativeness_score_std,representativeness_score_min,representativeness_score_max,balanced_accuracy_mean,balanced_accuracy_std,total_experiments
+cluster_based,0.3421,0.0917,0.1948,0.4912,1.1157,0.1013,1.003,1.2896,0.5322,0.0301,18
+equiprobable,0.3442,0.0901,0.2008,0.5167,1.1429,0.1222,1.001,1.431,0.5268,0.0412,18
