@@ -325,3 +325,217 @@ def create_model(
 
 # Legacy aliases
 VAE = AdaptiveVAE
+class EnhancedVAELoss(nn.Module):
+    """
+    Enhanced VAE loss function with adaptive weighting for multiple latent dimensions.
+    """
+    
+    def __init__(
+        self, 
+        categorical_cardinality: Dict[str, Any], 
+        num_numerical: int,
+        latent_dim: int = 2,
+        reconstruction_weight: float = 1.0,
+        kl_weight: float = 1.0
+    ):
+        super(EnhancedVAELoss, self).__init__()
+        
+        self.categorical_cardinality = categorical_cardinality
+        self.num_numerical = num_numerical
+        self.latent_dim = latent_dim
+        self.reconstruction_weight = reconstruction_weight
+        self.kl_weight = kl_weight
+        
+        # Adaptive weights based on latent dimension
+        if latent_dim > 16:
+            self.kl_weight *= 0.5  # Reduce KL weight for high-dimensional spaces
+        elif latent_dim <= 2:
+            self.kl_weight *= 1.5  # Increase KL weight for low-dimensional spaces
+        
+        logger.info(f"EnhancedVAELoss initialized: latent_dim={latent_dim}, kl_weight={self.kl_weight}")
+    
+    def forward(
+        self, 
+        decoded_outputs: Dict[str, torch.Tensor], 
+        target: torch.Tensor, 
+        mu: torch.Tensor, 
+        logvar: torch.Tensor, 
+        beta: float = 1.0
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Calculate enhanced VAE loss.
+        
+        Args:
+            decoded_outputs: Decoded outputs from VAE
+            target: Original input data
+            mu: Latent means
+            logvar: Latent log variances
+            beta: Beta parameter for β-VAE
+            
+        Returns:
+            Tuple of (total_loss, numerical_loss, categorical_loss, kl_loss)
+        """
+        batch_size = target.shape[0]
+        
+        # Reconstruction loss for numerical features
+        numerical_decoded = decoded_outputs['numerical']
+        numerical_target = target[:, :self.num_numerical]
+        
+        # Use MSE for numerical features with normalization
+        numerical_loss = F.mse_loss(numerical_decoded, numerical_target, reduction='sum')
+        numerical_loss = numerical_loss / batch_size
+        
+        # Reconstruction loss for categorical features
+        categorical_loss = torch.tensor(0.0, device=target.device)
+        
+        if self.categorical_cardinality:
+            start_idx = self.num_numerical
+            
+            for feature, info in self.categorical_cardinality.items():
+                if feature in decoded_outputs:
+                    # Get the categorical predictions and targets
+                    cat_predictions = decoded_outputs[feature]
+                    
+                    # Extract one-hot encoded targets
+                    end_idx = start_idx + info['cardinality']
+                    cat_targets = target[:, start_idx:end_idx]
+                    
+                    # Use cross-entropy loss for categorical features
+                    # Convert one-hot to class indices
+                    cat_targets_indices = torch.argmax(cat_targets, dim=1)
+                    
+                    # Add small epsilon to prevent log(0)
+                    cat_predictions_safe = torch.clamp(cat_predictions, min=1e-8, max=1-1e-8)
+                    
+                    feature_loss = F.cross_entropy(
+                        torch.log(cat_predictions_safe), 
+                        cat_targets_indices, 
+                        reduction='sum'
+                    )
+                    categorical_loss += feature_loss
+                    
+                    start_idx = end_idx
+            
+            categorical_loss = categorical_loss / batch_size
+        
+        # KL divergence loss with latent dimension adaptation
+        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        
+        # Normalize KL loss by batch size and latent dimension
+        kl_loss = kl_loss / (batch_size * self.latent_dim)
+        
+        # Apply adaptive KL weighting for different latent dimensions
+        if self.latent_dim > 8:
+            # For high-dimensional latent spaces, apply additional normalization
+            kl_scale = 1.0 / np.log(self.latent_dim)
+            kl_loss = kl_loss * kl_scale
+        
+        # Total loss with beta weighting
+        total_loss = (
+            self.reconstruction_weight * (numerical_loss + categorical_loss) + 
+            beta * self.kl_weight * kl_loss
+        )
+        
+        return total_loss, numerical_loss, categorical_loss, kl_loss
+
+
+class BetaScheduler:
+    """
+    Beta scheduling for β-VAE training with multiple strategies.
+    """
+    
+    @staticmethod
+    def get_schedule(
+        beta_start: float, 
+        beta_end: float, 
+        num_epochs: int, 
+        strategy: str = 'linear'
+    ) -> List[float]:
+        """
+        Generate beta schedule for training.
+        
+        Args:
+            beta_start: Starting beta value
+            beta_end: Ending beta value
+            num_epochs: Number of training epochs
+            strategy: Scheduling strategy
+            
+        Returns:
+            List of beta values for each epoch
+        """
+        if strategy == 'constant':
+            return [beta_end] * num_epochs
+        
+        elif strategy == 'linear':
+            return np.linspace(beta_start, beta_end, num_epochs).tolist()
+        
+        elif strategy == 'exponential':
+            if beta_start == 0:
+                beta_start = 1e-6  # Avoid log(0)
+            
+            log_start = np.log(beta_start)
+            log_end = np.log(beta_end)
+            log_schedule = np.linspace(log_start, log_end, num_epochs)
+            return np.exp(log_schedule).tolist()
+        
+        elif strategy == 'cyclical':
+            # Cyclical annealing with multiple cycles
+            num_cycles = max(1, num_epochs // 20)  # Cycle every 20 epochs
+            cycle_length = num_epochs // num_cycles
+            
+            schedule = []
+            for cycle in range(num_cycles):
+                cycle_schedule = np.linspace(beta_start, beta_end, cycle_length)
+                schedule.extend(cycle_schedule)
+            
+            # Fill remaining epochs
+            while len(schedule) < num_epochs:
+                schedule.append(beta_end)
+            
+            return schedule[:num_epochs]
+        
+        elif strategy == 'warmup':
+            # Warmup: start with reconstruction only, gradually add KL
+            warmup_epochs = min(10, num_epochs // 4)
+            warmup_schedule = np.linspace(0, beta_end, warmup_epochs)
+            remaining_schedule = [beta_end] * (num_epochs - warmup_epochs)
+            return warmup_schedule.tolist() + remaining_schedule
+        
+        else:
+            logger.warning(f"Unknown beta strategy: {strategy}, using linear")
+            return np.linspace(beta_start, beta_end, num_epochs).tolist()
+
+
+def get_latent_encoding(
+    model: AdaptiveVAE, 
+    data_tensor: torch.Tensor, 
+    batch_size: int = 512,
+    use_mean: bool = True
+) -> np.ndarray:
+    """
+    Get latent space encodings for input data.
+    
+    Args:
+        model: Trained VAE model
+        data_tensor: Input data tensor
+        batch_size: Batch size for encoding
+        use_mean: Whether to use mean (True) or sample (False)
+        
+    Returns:
+        Latent space encodings
+    """
+    model.eval()
+    device = next(model.parameters()).device
+    data_tensor = data_tensor.to(device)
+    
+    encodings = []
+    with torch.no_grad():
+        for i in range(0, len(data_tensor), batch_size):
+            batch = data_tensor[i:i + batch_size]
+            latent_repr = model.get_latent_representation(batch, use_mean=use_mean)
+            encodings.append(latent_repr.cpu().numpy())
+    
+    return np.vstack(encodings)
+
+VAE = AdaptiveVAE
+VAELoss = EnhancedVAELoss

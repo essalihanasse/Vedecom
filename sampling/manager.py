@@ -541,7 +541,7 @@ class EnhancedSamplingManager(SamplingManager):
             
         except Exception as e:
             logger.warning(f"Could not create latent dimension sampling analysis: {e}")
-
+SamplingManager=EnhancedSamplingManager
 
 class EnhancedSamplingManagerFactory:
     """Factory for creating enhanced sampling managers with different configurations."""
