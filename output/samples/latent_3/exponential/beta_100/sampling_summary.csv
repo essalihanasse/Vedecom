@@ -1,0 +1,10 @@
+latent_dim,method,sample_size,n_selected,strategy,beta,success
+3,cluster_based,100,100,exponential,100,True
+3,cluster_based,400,400,exponential,100,True
+3,cluster_based,900,900,exponential,100,True
+3,latin_hypercube,100,100,exponential,100,True
+3,latin_hypercube,400,400,exponential,100,True
+3,latin_hypercube,900,900,exponential,100,True
+3,adaptive_latin_hypercube,100,100,exponential,100,True
+3,adaptive_latin_hypercube,400,400,exponential,100,True
+3,adaptive_latin_hypercube,900,900,exponential,100,True

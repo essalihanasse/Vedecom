@@ -52,7 +52,7 @@ class ModelConfig:
     # Training
     BATCH_SIZE: int = 128
     LEARNING_RATE: float = 1e-3
-    NUM_EPOCHS: int = 50
+    NUM_EPOCHS: int = 300
     
     # Latent dimension specific settings
     LATENT_DIM_CONFIGS: Dict[int, Dict[str, Any]] = field(default_factory=lambda: {
@@ -84,13 +84,13 @@ class ModelConfig:
 @dataclass  
 class TrainingConfig:
     """Training configuration."""
-    BETA_VALUES: List[float] = field(default_factory=lambda: [0.1, 0.5, 1.0])
+    BETA_VALUES: List[float] = field(default_factory=lambda: [1.0, 10, 100])
     ANNEALING_STRATEGIES: List[str] = field(default_factory=lambda: ['linear', 'exponential'])
     SAMPLE_SIZES: List[int] = field(default_factory=lambda: [100, 400, 900])
     
     # Early stopping
     EARLY_STOPPING: bool = True
-    EARLY_STOPPING_PATIENCE: int = 10
+    EARLY_STOPPING_PATIENCE: int = 20
     EARLY_STOPPING_MIN_DELTA: float = 0.001
     RESTORE_BEST_WEIGHTS: bool = True
     

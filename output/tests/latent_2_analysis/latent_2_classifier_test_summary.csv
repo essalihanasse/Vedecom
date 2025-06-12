@@ -1,0 +1,13 @@
+method,sample_size,balanced_accuracy_mean,balanced_accuracy_std,balanced_accuracy_min,balanced_accuracy_max,accuracy_mean,accuracy_std,roc_auc_mean,roc_auc_std,cross_val_mean_mean,cross_val_mean_std,interpretation_<lambda>
+adaptive_latin_hypercube,100,0.9944,0.0086,0.9833,1.0,1.0,0.0,1.0,0.0,0.99,0.0055,Poor sampling (easily distinguishable)
+adaptive_latin_hypercube,400,1.0,0.0,1.0,1.0,1.0,0.0,1.0,0.0,0.9985,0.0009,Poor sampling (easily distinguishable)
+adaptive_latin_hypercube,900,1.0,0.0,1.0,1.0,1.0,0.0,1.0,0.0,0.9989,0.001,Poor sampling (easily distinguishable)
+cluster_based,100,0.9944,0.0136,0.9667,1.0,1.0,0.0001,1.0,0.0,0.9817,0.0151,Poor sampling (easily distinguishable)
+cluster_based,400,1.0,0.0,1.0,1.0,1.0,0.0,1.0,0.0,0.9942,0.011,Poor sampling (easily distinguishable)
+cluster_based,900,1.0,0.0,1.0,1.0,1.0,0.0,1.0,0.0,0.9916,0.0102,Poor sampling (easily distinguishable)
+equiprobable,100,0.9944,0.0136,0.9667,1.0,1.0,0.0001,1.0,0.0,0.9484,0.0105,Poor sampling (easily distinguishable)
+equiprobable,400,1.0,0.0,1.0,1.0,1.0,0.0,1.0,0.0,0.9711,0.0069,Poor sampling (easily distinguishable)
+equiprobable,900,1.0,0.0,1.0,1.0,1.0,0.0,1.0,0.0,0.9578,0.0093,Poor sampling (easily distinguishable)
+latin_hypercube,100,1.0,0.0,1.0,1.0,1.0,0.0,1.0,0.0,0.9942,0.0038,Poor sampling (easily distinguishable)
+latin_hypercube,400,0.9993,0.0017,0.9958,1.0,1.0,0.0,1.0,0.0,0.9988,0.0008,Poor sampling (easily distinguishable)
+latin_hypercube,900,1.0,0.0,1.0,1.0,1.0,0.0,1.0,0.0,0.9998,0.0003,Poor sampling (easily distinguishable)

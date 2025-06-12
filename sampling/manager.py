@@ -12,14 +12,74 @@ import shutil
 import pickle
 from typing import Dict, List, Optional, Any
 import logging
+from models.vae import AdaptiveVAE, get_latent_encoding
 
-from sampling.manager import SamplingManager
 from sampling.base import MultiMethodSampler, SamplingResult
 from sampling.equiprobable import EquiprobableSampler
 from sampling.cluster_based import ClusterBasedSampler  
 from sampling.latin_hypercube import LatinHypercubeSampler, AdaptiveLatinHypercubeSampler
 
 logger = logging.getLogger(__name__)
+
+class SamplingManager:
+    """Base sampling manager for VAE models."""
+    
+    def __init__(self, config):
+        self.config = config
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Available sampling methods
+        self.available_methods = {
+            'equiprobable': EquiprobableSampler,
+            'cluster_based': ClusterBasedSampler,
+            'latin_hypercube': LatinHypercubeSampler,
+            'adaptive_latin_hypercube': AdaptiveLatinHypercubeSampler
+        }
+        
+        logger.info("Sampling manager initialized")
+    
+    def _recover_final_model_from_checkpoint(self, model_dir: str) -> None:
+        """Recovery method to copy best checkpoint as final model."""
+        checkpoint_files = glob.glob(os.path.join(model_dir, "checkpoint_epoch_*.pth"))
+        
+        if not checkpoint_files:
+            raise Exception(f"No checkpoint files found in {model_dir}")
+        
+        def get_val_loss(filepath):
+            filename = os.path.basename(filepath)
+            match = re.search(r'val_loss_(\d+\.?\d*)', filename)
+            return float(match.group(1)) if match else float('inf')
+        
+        best_checkpoint = min(checkpoint_files, key=get_val_loss)
+        final_path = os.path.join(model_dir, 'vae_model_final.pth')
+        shutil.copy2(best_checkpoint, final_path)
+        
+        if os.path.exists(final_path):
+            logger.info(f"✅ Recovered model from: {os.path.basename(best_checkpoint)}")
+    
+    def _load_categorical_info(self) -> Dict[str, Any]:
+        """Load categorical information from preprocessing objects."""
+        try:
+            with open(os.path.join(self.config.paths.DATA_DIR, 'preprocessing_objects.pkl'), 'rb') as f:
+                objects = pickle.load(f)
+            return objects.get('categorical_cardinality', {})
+        except:
+            return {}
+    
+    def _reconstruct_checkpoint_info(self, checkpoint: Dict, strategy: str, beta: float) -> Dict:
+        """Reconstruct missing checkpoint information."""
+        if 'input_dim' not in checkpoint:
+            # Try to load from preprocessed data
+            try:
+                preprocessed_df = pd.read_csv(self.config.paths.PREPROCESSED_FILE)
+                checkpoint['input_dim'] = preprocessed_df.shape[1]
+            except:
+                checkpoint['input_dim'] = 100  # fallback
+        
+        if 'num_numerical' not in checkpoint:
+            checkpoint['num_numerical'] = len(self.config.data.NUMERICAL_COLS)
+        
+        return checkpoint
 
 class EnhancedSamplingManager(SamplingManager):
     """
@@ -238,7 +298,6 @@ class EnhancedSamplingManager(SamplingManager):
         """
         Load trained model and generate latent encodings for specific latent dimension.
         """
-        from models.vae import AdaptiveVAE, get_latent_encoding
         
         model_dir = os.path.join(
             self.config.paths.MODELS_DIR, 
@@ -541,7 +600,7 @@ class EnhancedSamplingManager(SamplingManager):
             
         except Exception as e:
             logger.warning(f"Could not create latent dimension sampling analysis: {e}")
-SamplingManager=EnhancedSamplingManager
+
 
 class EnhancedSamplingManagerFactory:
     """Factory for creating enhanced sampling managers with different configurations."""

@@ -1,0 +1,8 @@
+latent_dim,method,n_selected_mean,n_selected_std,n_selected_count,sample_size_mean
+2,adaptive_latin_hypercube,466.667,339.55,18,466.667
+2,cluster_based,466.667,339.55,18,466.667
+2,equiprobable,393.667,277.711,18,466.667
+2,latin_hypercube,466.667,339.55,18,466.667
+3,adaptive_latin_hypercube,466.667,339.55,18,466.667
+3,cluster_based,466.667,339.55,18,466.667
+3,latin_hypercube,466.667,339.55,18,466.667

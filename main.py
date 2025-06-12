@@ -316,7 +316,7 @@ def main():
     parser.add_argument('--methods', nargs='+', 
                        choices=['cluster_based', 'equiprobable', 'latin_hypercube', 
                                'adaptive_latin_hypercube', 'all'],
-                       default=['cluster_based', 'equiprobable', 'latin_hypercube'],
+                       default=['cluster_based', 'equiprobable'],
                        help='Sampling methods to use')
     
     # Sampling parameters
