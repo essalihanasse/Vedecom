@@ -86,7 +86,7 @@ class TrainingConfig:
     """Training configuration."""
     BETA_VALUES: List[float] = field(default_factory=lambda: [1.0, 10, 100])
     ANNEALING_STRATEGIES: List[str] = field(default_factory=lambda: ['linear', 'exponential'])
-    SAMPLE_SIZES: List[int] = field(default_factory=lambda: [100, 400, 900])
+    SAMPLE_SIZES: List[int] = field(default_factory=lambda: [100, 400, 900, 1225, 1600])
     
     # Early stopping
     EARLY_STOPPING: bool = True

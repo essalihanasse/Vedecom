@@ -1,6 +1,9 @@
 """
 Updated main orchestrator for VAE pipeline with multiple latent dimensions support.
 """
+import matplotlib
+matplotlib.use('Agg')  # Use non-GUI backend
+import matplotlib.pyplot as plt
 
 import os
 import sys

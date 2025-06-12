@@ -1,0 +1,5 @@
+method,wasserstein_distance_mean,wasserstein_distance_std,wasserstein_distance_min,wasserstein_distance_max,representativeness_score_mean,representativeness_score_std,representativeness_score_min,representativeness_score_max,balanced_accuracy_mean,balanced_accuracy_std,balanced_accuracy_min,balanced_accuracy_max,roc_auc_mean,roc_auc_std,cross_val_mean_mean,cross_val_mean_std,latent_dim_count,latent_dim_nunique
+adaptive_latin_hypercube,0.4796,0.4452,0.0215,2.0189,0.5295,0.1395,0.1766,0.7705,0.5068,0.0085,0.4995,0.5408,0.9641,0.0219,0.5009,0.0019,60,2
+cluster_based,0.4802,0.4464,0.0205,2.0307,0.5288,0.1408,0.173,0.7762,0.5,0.0,0.4999,0.5,0.6173,0.0794,0.5,0.0,60,2
+equiprobable,0.5321,0.4666,0.0391,2.0128,0.5,0.1228,0.174,0.6942,0.5,0.0,0.4999,0.5,0.7176,0.102,0.5,0.0,60,2
+latin_hypercube,0.4795,0.4445,0.0211,2.0075,0.5308,0.1424,0.1743,0.7771,0.5072,0.0093,0.4995,0.5574,0.9659,0.0231,0.5009,0.0017,60,2

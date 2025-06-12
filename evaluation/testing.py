@@ -92,7 +92,16 @@ class SimplifiedTester:
                 sampled_subset = sampled_df.sample(n=n_sampled, random_state=42)
             else:
                 sampled_subset = sampled_df.copy()
-            
+            # Remove extra columns that were added during sampling
+            extra_columns = ['latent_1', 'latent_2', 'representative_id']
+            for col in extra_columns:
+                if col in sampled_subset.columns:
+                    sampled_subset = sampled_subset.drop(columns=[col])
+
+            # Ensure both dataframes have the same columns
+            common_columns = original_subset.columns.intersection(sampled_subset.columns)
+            original_subset = original_subset[common_columns]
+            sampled_subset = sampled_subset[common_columns]
             # Create labels (0 = original, 1 = sampled)
             original_labels = np.zeros(len(original_subset))
             sampled_labels = np.ones(len(sampled_subset))

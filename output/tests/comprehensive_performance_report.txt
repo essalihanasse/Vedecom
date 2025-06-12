@@ -1,0 +1,115 @@
+COMPREHENSIVE VAE SAMPLING EVALUATION REPORT
+==================================================
+
+OVERALL STATISTICS:
+Total evaluations: 240
+Latent dimensions tested: [np.int64(2), np.int64(3)]
+Sampling methods: ['adaptive_latin_hypercube', 'cluster_based', 'equiprobable', 'latin_hypercube']
+Sample sizes: [np.int64(100), np.int64(400), np.int64(900), np.int64(1225), np.int64(1600)]
+
+TOP PERFORMING CONFIGURATIONS:
+ 1. adaptive_latin_hypercube (sample_size=1225) - Overall Score: 2.000
+    Wasserstein: 0.2988 (rank 2)
+    Representativeness: 0.623 (rank 2)
+    Classifier Bal.Acc: 0.510 (rank 2)
+    Experiments: 12
+
+ 2. latin_hypercube (sample_size=1225) - Overall Score: 2.333
+    Wasserstein: 0.2986 (rank 1)
+    Representativeness: 0.629 (rank 1)
+    Classifier Bal.Acc: 0.507 (rank 5)
+    Experiments: 12
+
+ 3. latin_hypercube (sample_size=1600) - Overall Score: 6.000
+    Wasserstein: 0.3666 (rank 9)
+    Representativeness: 0.612 (rank 5)
+    Classifier Bal.Acc: 0.508 (rank 4)
+    Experiments: 12
+
+ 4. adaptive_latin_hypercube (sample_size=1600) - Overall Score: 6.667
+    Wasserstein: 0.3659 (rank 8)
+    Representativeness: 0.613 (rank 4)
+    Classifier Bal.Acc: 0.506 (rank 8)
+    Experiments: 12
+
+ 5. cluster_based (sample_size=1225) - Overall Score: 7.000
+    Wasserstein: 0.2992 (rank 3)
+    Representativeness: 0.621 (rank 3)
+    Classifier Bal.Acc: 0.500 (rank 15)
+    Experiments: 12
+
+ 6. latin_hypercube (sample_size=900) - Overall Score: 7.000
+    Wasserstein: 0.3416 (rank 5)
+    Representativeness: 0.601 (rank 9)
+    Classifier Bal.Acc: 0.506 (rank 7)
+    Experiments: 12
+
+ 7. adaptive_latin_hypercube (sample_size=900) - Overall Score: 7.333
+    Wasserstein: 0.3420 (rank 6)
+    Representativeness: 0.600 (rank 10)
+    Classifier Bal.Acc: 0.506 (rank 6)
+    Experiments: 12
+
+ 8. equiprobable (sample_size=1600) - Overall Score: 8.333
+    Wasserstein: 0.3171 (rank 4)
+    Representativeness: 0.601 (rank 8)
+    Classifier Bal.Acc: 0.500 (rank 13)
+    Experiments: 12
+
+ 9. cluster_based (sample_size=1600) - Overall Score: 9.000
+    Wasserstein: 0.3667 (rank 10)
+    Representativeness: 0.610 (rank 6)
+    Classifier Bal.Acc: 0.500 (rank 11)
+    Experiments: 12
+
+10. cluster_based (sample_size=900) - Overall Score: 9.667
+    Wasserstein: 0.3430 (rank 7)
+    Representativeness: 0.605 (rank 7)
+    Classifier Bal.Acc: 0.500 (rank 15)
+    Experiments: 12
+
+METHOD-WISE ANALYSIS:
+
+ADAPTIVE_LATIN_HYPERCUBE:
+  Wasserstein Distance: 0.4796 ± 0.4452
+  Classifier Bal.Acc: 0.507 ± 0.009
+  Representativeness: 0.529 ± 0.140
+  Sampling Quality: Excellent (indistinguishable from original)
+
+CLUSTER_BASED:
+  Wasserstein Distance: 0.4802 ± 0.4464
+  Classifier Bal.Acc: 0.500 ± 0.000
+  Representativeness: 0.529 ± 0.141
+  Sampling Quality: Excellent (indistinguishable from original)
+
+EQUIPROBABLE:
+  Wasserstein Distance: 0.5321 ± 0.4666
+  Classifier Bal.Acc: 0.500 ± 0.000
+  Representativeness: 0.500 ± 0.123
+  Sampling Quality: Excellent (indistinguishable from original)
+
+LATIN_HYPERCUBE:
+  Wasserstein Distance: 0.4795 ± 0.4445
+  Classifier Bal.Acc: 0.507 ± 0.009
+  Representativeness: 0.531 ± 0.142
+  Sampling Quality: Excellent (indistinguishable from original)
+
+LATENT DIMENSION EFFECTS:
+
+Latent Dimension 2:
+  Mean Wasserstein: 0.5381
+  Mean Classifier Bal.Acc: 0.503
+  Mean Representativeness: 0.480
+
+Latent Dimension 3:
+  Mean Wasserstein: 0.4476
+  Mean Classifier Bal.Acc: 0.504
+  Mean Representativeness: 0.565
+
+KEY INSIGHTS:
+• Best performing method overall: adaptive_latin_hypercube
+• 100.0% of samples achieved excellent quality (classifier cannot distinguish)
+• Optimal sample size for classifier performance: 100
+• Best performing latent dimension: 2
+
+Report generated successfully.
