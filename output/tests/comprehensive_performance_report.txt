@@ -9,101 +9,101 @@ Sample sizes: [np.int64(100), np.int64(400), np.int64(900), np.int64(1225), np.i
 
 TOP PERFORMING CONFIGURATIONS:
  1. adaptive_latin_hypercube (sample_size=1225) - Overall Score: 2.000
-    Wasserstein: 0.2988 (rank 2)
+    Wasserstein: 0.2984 (rank 1)
     Representativeness: 0.623 (rank 2)
-    Classifier Bal.Acc: 0.510 (rank 2)
+    Classifier Bal.Acc: 0.529 (rank 3)
     Experiments: 12
 
- 2. latin_hypercube (sample_size=1225) - Overall Score: 2.333
-    Wasserstein: 0.2986 (rank 1)
-    Representativeness: 0.629 (rank 1)
-    Classifier Bal.Acc: 0.507 (rank 5)
+ 2. latin_hypercube (sample_size=1225) - Overall Score: 3.000
+    Wasserstein: 0.3004 (rank 3)
+    Representativeness: 0.626 (rank 1)
+    Classifier Bal.Acc: 0.528 (rank 5)
     Experiments: 12
 
- 3. latin_hypercube (sample_size=1600) - Overall Score: 6.000
-    Wasserstein: 0.3666 (rank 9)
-    Representativeness: 0.612 (rank 5)
-    Classifier Bal.Acc: 0.508 (rank 4)
-    Experiments: 12
-
- 4. adaptive_latin_hypercube (sample_size=1600) - Overall Score: 6.667
-    Wasserstein: 0.3659 (rank 8)
-    Representativeness: 0.613 (rank 4)
-    Classifier Bal.Acc: 0.506 (rank 8)
-    Experiments: 12
-
- 5. cluster_based (sample_size=1225) - Overall Score: 7.000
-    Wasserstein: 0.2992 (rank 3)
-    Representativeness: 0.621 (rank 3)
-    Classifier Bal.Acc: 0.500 (rank 15)
-    Experiments: 12
-
- 6. latin_hypercube (sample_size=900) - Overall Score: 7.000
+ 3. adaptive_latin_hypercube (sample_size=900) - Overall Score: 5.000
     Wasserstein: 0.3416 (rank 5)
-    Representativeness: 0.601 (rank 9)
-    Classifier Bal.Acc: 0.506 (rank 7)
+    Representativeness: 0.603 (rank 9)
+    Classifier Bal.Acc: 0.531 (rank 1)
     Experiments: 12
 
- 7. adaptive_latin_hypercube (sample_size=900) - Overall Score: 7.333
-    Wasserstein: 0.3420 (rank 6)
-    Representativeness: 0.600 (rank 10)
-    Classifier Bal.Acc: 0.506 (rank 6)
+ 4. adaptive_latin_hypercube (sample_size=1600) - Overall Score: 5.667
+    Wasserstein: 0.3664 (rank 9)
+    Representativeness: 0.612 (rank 4)
+    Classifier Bal.Acc: 0.528 (rank 4)
     Experiments: 12
 
- 8. equiprobable (sample_size=1600) - Overall Score: 8.333
-    Wasserstein: 0.3171 (rank 4)
-    Representativeness: 0.601 (rank 8)
-    Classifier Bal.Acc: 0.500 (rank 13)
+ 5. cluster_based (sample_size=1225) - Overall Score: 5.667
+    Wasserstein: 0.2991 (rank 2)
+    Representativeness: 0.619 (rank 3)
+    Classifier Bal.Acc: 0.500 (rank 12)
     Experiments: 12
 
- 9. cluster_based (sample_size=1600) - Overall Score: 9.000
-    Wasserstein: 0.3667 (rank 10)
-    Representativeness: 0.610 (rank 6)
+ 6. latin_hypercube (sample_size=900) - Overall Score: 6.000
+    Wasserstein: 0.3421 (rank 6)
+    Representativeness: 0.601 (rank 10)
+    Classifier Bal.Acc: 0.529 (rank 2)
+    Experiments: 12
+
+ 7. latin_hypercube (sample_size=1600) - Overall Score: 7.000
+    Wasserstein: 0.3671 (rank 10)
+    Representativeness: 0.609 (rank 5)
+    Classifier Bal.Acc: 0.528 (rank 6)
+    Experiments: 12
+
+ 8. cluster_based (sample_size=1600) - Overall Score: 8.333
+    Wasserstein: 0.3659 (rank 8)
+    Representativeness: 0.607 (rank 6)
     Classifier Bal.Acc: 0.500 (rank 11)
     Experiments: 12
 
-10. cluster_based (sample_size=900) - Overall Score: 9.667
-    Wasserstein: 0.3430 (rank 7)
+ 9. cluster_based (sample_size=900) - Overall Score: 9.000
+    Wasserstein: 0.3425 (rank 7)
     Representativeness: 0.605 (rank 7)
-    Classifier Bal.Acc: 0.500 (rank 15)
+    Classifier Bal.Acc: 0.500 (rank 13)
+    Experiments: 12
+
+10. equiprobable (sample_size=1600) - Overall Score: 10.667
+    Wasserstein: 0.3160 (rank 4)
+    Representativeness: 0.604 (rank 8)
+    Classifier Bal.Acc: 0.500 (rank 20)
     Experiments: 12
 
 METHOD-WISE ANALYSIS:
 
 ADAPTIVE_LATIN_HYPERCUBE:
-  Wasserstein Distance: 0.4796 ± 0.4452
-  Classifier Bal.Acc: 0.507 ± 0.009
-  Representativeness: 0.529 ± 0.140
-  Sampling Quality: Excellent (indistinguishable from original)
-
-CLUSTER_BASED:
-  Wasserstein Distance: 0.4802 ± 0.4464
-  Classifier Bal.Acc: 0.500 ± 0.000
+  Wasserstein Distance: 0.4792 ± 0.4454
+  Classifier Bal.Acc: 0.525 ± 0.017
   Representativeness: 0.529 ± 0.141
   Sampling Quality: Excellent (indistinguishable from original)
 
-EQUIPROBABLE:
-  Wasserstein Distance: 0.5321 ± 0.4666
+CLUSTER_BASED:
+  Wasserstein Distance: 0.4801 ± 0.4467
   Classifier Bal.Acc: 0.500 ± 0.000
-  Representativeness: 0.500 ± 0.123
+  Representativeness: 0.528 ± 0.141
+  Sampling Quality: Excellent (indistinguishable from original)
+
+EQUIPROBABLE:
+  Wasserstein Distance: 0.5318 ± 0.4665
+  Classifier Bal.Acc: 0.500 ± 0.000
+  Representativeness: 0.499 ± 0.123
   Sampling Quality: Excellent (indistinguishable from original)
 
 LATIN_HYPERCUBE:
-  Wasserstein Distance: 0.4795 ± 0.4445
-  Classifier Bal.Acc: 0.507 ± 0.009
-  Representativeness: 0.531 ± 0.142
+  Wasserstein Distance: 0.4803 ± 0.4458
+  Classifier Bal.Acc: 0.524 ± 0.015
+  Representativeness: 0.529 ± 0.141
   Sampling Quality: Excellent (indistinguishable from original)
 
 LATENT DIMENSION EFFECTS:
 
 Latent Dimension 2:
-  Mean Wasserstein: 0.5381
-  Mean Classifier Bal.Acc: 0.503
-  Mean Representativeness: 0.480
+  Mean Wasserstein: 0.5386
+  Mean Classifier Bal.Acc: 0.512
+  Mean Representativeness: 0.479
 
 Latent Dimension 3:
-  Mean Wasserstein: 0.4476
-  Mean Classifier Bal.Acc: 0.504
+  Mean Wasserstein: 0.4472
+  Mean Classifier Bal.Acc: 0.513
   Mean Representativeness: 0.565
 
 KEY INSIGHTS:

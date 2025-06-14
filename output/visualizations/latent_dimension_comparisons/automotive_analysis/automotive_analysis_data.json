@@ -1,0 +1,72 @@
+{
+  "latent_dimensions": [
+    2,
+    3
+  ],
+  "category_quality": {
+    "2": {
+      "speed_velocity": {
+        "avg_score": 0,
+        "feature_count": 0
+      },
+      "position": {
+        "avg_score": 0,
+        "feature_count": 0
+      },
+      "acceleration": {
+        "avg_score": 0,
+        "feature_count": 0
+      },
+      "climate": {
+        "avg_score": 0,
+        "feature_count": 0
+      },
+      "road_infrastructure": {
+        "avg_score": 0,
+        "feature_count": 0
+      },
+      "geographic": {
+        "avg_score": 0,
+        "feature_count": 0
+      }
+    },
+    "3": {
+      "speed_velocity": {
+        "avg_score": 0,
+        "feature_count": 0
+      },
+      "position": {
+        "avg_score": 0,
+        "feature_count": 0
+      },
+      "acceleration": {
+        "avg_score": 0,
+        "feature_count": 0
+      },
+      "climate": {
+        "avg_score": 0,
+        "feature_count": 0
+      },
+      "road_infrastructure": {
+        "avg_score": 0,
+        "feature_count": 0
+      },
+      "geographic": {
+        "avg_score": 0,
+        "feature_count": 0
+      }
+    }
+  },
+  "overall_scores": {
+    "2": 0,
+    "3": 0
+  },
+  "coverage_ratios": {
+    "2": 0.0,
+    "3": 0.0
+  },
+  "recommendations": {
+    "best_overall": 2,
+    "category_specific": {}
+  }
+}

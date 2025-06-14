@@ -1,0 +1,3 @@
+latent_dim,avg_total_variance,std_total_variance,avg_active_dims,active_ratio,avg_correlation,n_models
+2,23.394655,30.96016,2.0,1.0,0.3721269833273591,6
+3,12.479417,12.660317,3.0,1.0,0.1435535124013927,6

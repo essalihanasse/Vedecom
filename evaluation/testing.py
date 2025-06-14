@@ -139,8 +139,8 @@ class SimplifiedTester:
             
             # Train Random Forest classifier
             classifier = RandomForestClassifier(
-                n_estimators=20,
-                max_depth=5,
+                n_estimators=100,
+                max_depth=10,
                 random_state=42,
                 n_jobs=-1
             )
